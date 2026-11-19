@@ -268,7 +268,7 @@ import * as pdfjsLib from './pdf.min.mjs';
 
 // 'artifact' = versionen i Claude (molnlagring), 'pwa' = hemskärmsappen (allt sparas på iPaden). Sätts av byggskriptet.
 const APP_MODE = 'pwa';
-const APP_VERSION = '2026.11.19b';
+const APP_VERSION = '2026.11.19c';
 const LOCAL = APP_MODE === 'pwa';
 
 const BASE = document.baseURI;
@@ -908,7 +908,38 @@ const folderOf = l => (l.mapp && S.mappar[l.mapp]) ? l.mapp : '';
 function listRow(l){
   return `<div class="row"><button class="main" data-list="${esc(l.id)}"><div class="t">${esc(l.namn)}</div>` +
     `<div class="s">${esc([l.datum, l.verk.length + (l.verk.length === 1 ? ' låt' : ' låtar')].filter(Boolean).join(' · '))}</div></button>` +
-    `<button class="btn small" data-play="${esc(l.id)}">▶ Spela</button></div>`;
+    `<button class="btn small" data-play="${esc(l.id)}">▶ Spela</button><button class="btn small" data-lmenu="${esc(l.id)}" title="Flytta eller ta bort">⋯</button></div>`;
+}
+function deleteList(id){
+  delete S.listor[id]; IDB.put('kv', 'listor', S.listor); queueWrite('listor/' + id, null);
+  if (S.openList === id) S.openList = null;
+  renderListor();
+}
+// ⋯ på en låtlista: flytta till befintlig mapp, ny mapp eller ut ur mappar – eller ta bort listan
+function listMenu(id){
+  const l = S.listor[id]; if (!l) return;
+  const cur = folderOf(l);
+  const folders = Object.values(S.mappar).sort((a, b) => collator.compare(a.namn, b.namn));
+  openModal(`<h2>${esc(l.namn)}</h2>
+    <div class="field">Flytta till mapp</div>
+    <div class="pick list" style="margin-top:6px;max-height:40vh">
+      ${folders.map(m => `<button class="row pickrow" data-mv="${esc(m.id)}"><span class="main"><div class="t">📁 ${esc(m.namn)}</div></span><span class="plus">${m.id === cur ? '✓' : ''}</span></button>`).join('')}
+      <button class="row pickrow" data-mv=""><span class="main"><div class="t">Ingen mapp</div><div class="s">Listan ligger direkt under Låtlistor</div></span><span class="plus">${!cur ? '✓' : ''}</span></button>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:10px"><input class="search" id="lmNew" placeholder="Ny mapp – skriv ett namn" style="min-width:0;color:var(--fg)"><button class="btn" id="lmNewBtn">Skapa och flytta</button></div>
+    <div class="actions"><button class="btn danger" id="lmDel" style="margin-right:auto">Ta bort låtlistan</button><button class="btn primary" id="lmDone">Klar</button></div>`);
+  const move = fid => { const m = S.listor[id]; if (!m) return; m.mapp = fid; writeList(id); closeModal(); renderListor(); toast2(fid ? `Flyttad till ”${S.mappar[fid].namn}”` : 'Ligger nu utanför mapparna'); };
+  $('#modalBox').querySelectorAll('[data-mv]').forEach(b => b.onclick = () => move(b.dataset.mv));
+  const create = () => {
+    const name = $('#lmNew').value.trim(); if (!name) { $('#lmNew').focus(); return; }
+    const nid = newId('m'), now = Date.now();
+    S.mappar[nid] = { id: nid, namn: name.slice(0, 100), skapad: now, uppdaterad: now }; writeMapp(nid);
+    move(nid);
+  };
+  $('#lmNewBtn').onclick = create;
+  $('#lmNew').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); create(); } };
+  $('#lmDone').onclick = closeModal;
+  $('#lmDel').onclick = () => confirmBox('Ta bort låtlistan?', `”${esc(l.namn)}” tas bort${l.verk.length ? ` (${l.verk.length} ${l.verk.length === 1 ? 'låt' : 'låtar'})` : ''}. Noterna finns kvar i biblioteket. Det går inte att ångra.`, 'Ta bort', () => { deleteList(id); toast2('Låtlistan borttagen'); });
 }
 function renderListor(){
   const idx = $('#listorList');
@@ -942,6 +973,7 @@ function renderListor(){
   idx.querySelectorAll('[data-folder]').forEach(b => b.onclick = () => { S.openFolder = b.dataset.folder; renderListor(); window.scrollTo(0, 0); });
   idx.querySelectorAll('[data-list]').forEach(b => b.onclick = () => { S.openList = b.dataset.list; renderListor(); });
   idx.querySelectorAll('[data-play]').forEach(b => b.onclick = () => playList(b.dataset.play));
+  idx.querySelectorAll('[data-lmenu]').forEach(b => b.onclick = () => listMenu(b.dataset.lmenu));
   const showDetail = S.openList && S.listor[S.openList];
   $('#listorIndex').hidden = !!showDetail;
   $('#listDetail').hidden = !showDetail;
@@ -1004,9 +1036,7 @@ function renderListDetail(){
   $('#ldDate').onchange = e => { const m = S.listor[l.id]; if (!m) return; m.datum = e.target.value; writeList(l.id); };
   $('#ldAdd').onclick = () => pickForList(l.id);
   $('#ldUpload').onclick = () => { S.uploadTarget = l.id; $('#fileIn').click(); };
-  $('#ldDelete').onclick = () => confirmBox('Ta bort låtlistan?', `”${esc(l.namn)}” tas bort. Noterna finns kvar i biblioteket.`, 'Ta bort', () => {
-    delete S.listor[l.id]; IDB.put('kv','listor',S.listor); queueWrite('listor/' + l.id, null); S.openList = null; renderListor();
-  });
+  $('#ldDelete').onclick = () => confirmBox('Ta bort låtlistan?', `”${esc(l.namn)}” tas bort. Noterna finns kvar i biblioteket. Det går inte att ångra.`, 'Ta bort', () => deleteList(l.id));
   renderListItems();
 }
 function renderListItems(){
