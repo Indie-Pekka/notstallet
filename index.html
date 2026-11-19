@@ -101,6 +101,8 @@ body.alpha-pad .app{padding-right:44px}
 #stage{position:absolute;inset:0;touch-action:none;overflow:hidden}
 #pagewrap{position:absolute;left:0;top:0;background:#fff;box-shadow:0 0 0 1px #d6d1c8;will-change:transform}
 #pagewrap.anim{transition:transform .18s ease-out}
+#pagewrap.anim2{transition:transform .34s cubic-bezier(.2,.75,.25,1)}
+#vflash{position:absolute;inset:0;pointer-events:none;opacity:0;z-index:3}
 #pagewrap{transform-origin:0 0}
 #metro{position:absolute;left:12px;bottom:12px;z-index:7;background:rgba(250,248,244,.98);border:1px solid var(--line);border-radius:16px;padding:10px;box-shadow:0 8px 28px rgba(0,0,0,.22);width:min(560px,calc(100vw - 24px));display:flex;flex-direction:column;gap:8px}
 #metro .mrow{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
@@ -196,6 +198,7 @@ body.alpha-pad .app{padding-right:44px}
     </div>
     <div id="vmsg" hidden></div>
     <div id="vscroll" hidden><i></i></div>
+    <div id="vflash"></div>
   </div>
   <div id="vbar" hidden>
     <div class="grp">
@@ -268,7 +271,7 @@ import * as pdfjsLib from './pdf.min.mjs';
 
 // 'artifact' = versionen i Claude (molnlagring), 'pwa' = hemskärmsappen (allt sparas på iPaden). Sätts av byggskriptet.
 const APP_MODE = 'pwa';
-const APP_VERSION = '2026.11.19d';
+const APP_VERSION = '2026.11.19e';
 const LOCAL = APP_MODE === 'pwa';
 
 const BASE = document.baseURI;
@@ -1439,7 +1442,7 @@ async function exportBackup(){
     listor: Object.fromEntries(Object.values(S.listor).map(l => [l.id, strip(l)])),
     mappar: Object.fromEntries(Object.values(S.mappar).map(m => [m.id, strip(m)])),
     anteckningar: await allAnnotations(),
-    installningar: { metro: S.settings.metro, pickSort: S.settings.pickSort, fillWidth: S.settings.fillWidth, pencilDraws: S.settings.pencilDraws },
+    installningar: { metro: S.settings.metro, pickSort: S.settings.pickSort, fillWidth: S.settings.fillWidth, pencilDraws: S.settings.pencilDraws, flip: S.settings.flip },
   };
   files.unshift({ name: 'notstallet.json', data: new TextEncoder().encode(JSON.stringify(meta)) });
   // en läsbar innehållsförteckning för den som öppnar zip-filen på datorn
@@ -1498,6 +1501,7 @@ $('#bkFile').onchange = async e => {
         S.ann.set(k, e); await IDB.put('ann', k, e); nyaAnn++;
       }
     }
+    if (meta.installningar && meta.installningar.flip && !S.settings.flip) S.settings.flip = meta.installningar.flip;
     if (meta.installningar && meta.installningar.metro && !S.settings.metro) { S.settings.metro = meta.installningar.metro; Object.assign(M, S.settings.metro); }
     await IDB.put('kv', 'noter', S.noter); await IDB.put('kv', 'listor', S.listor); await IDB.put('kv', 'mappar', S.mappar); await IDB.put('kv', 'settings', S.settings);
     set(`Klart! ${nyaNoter} noter, ${nyaListor} låtlistor och anteckningar på ${nyaAnn} sidor lades in.${fanns ? ` ${fanns} noter fanns redan och hoppades över.` : ''}`);
@@ -1658,6 +1662,7 @@ async function showPage(opts = {}){
   }
   V.startAt = 0;
   placeWrap(false);
+  if (V.flipDir) { const d = V.flipDir; V.flipDir = 0; if (flipFx(d)) slideIn(d); }
   updateBar(); updateZoomPill();
   if (!opts.quiet) toast(pageLabel());
   prefetch(doc, id);
@@ -1674,11 +1679,13 @@ function computeBounds(){
 }
 const clampY = y => V.tall ? Math.min(0, Math.max(V.lowY, y)) : V.minY;
 // Gå till en bläddringspunkt: punkten hamnar alltid i skärmens överkant, även om det blir vitt under sidan
-function goToStop(t){ V.lowY = Math.min(V.minY, -t); V.offY = clampY(-t); placeWrap(true); }
+function goToStop(t, anim = true){ V.lowY = Math.min(V.minY, -t); V.offY = clampY(-t); placeWrap(anim); }
 const clampX = x => V.wide ? Math.min(0, Math.max(V.minX, x)) : V.minX;
 function placeWrap(anim){
   const { W, H } = stageSize();
-  wrap.classList.toggle('anim', !!anim);
+  if (V.slideAnim) { V.slideAnim.cancel(); V.slideAnim = null; }
+  wrap.classList.toggle('anim', anim === true);
+  wrap.classList.toggle('anim2', anim === 'slow');
   wrap.style.transform = `translate(${Math.round(V.wide ? V.offX : V.minX)}px, ${Math.round(V.offY)}px)`;
   const sc = $('#vscroll');
   sc.hidden = !V.tall;
@@ -1952,19 +1959,41 @@ async function prefetch(doc, id){
   } catch {}
 }
 
+// Bläddringseffekt: gör det tydligt att noten bytte vy. Inställning: glid, blink, båda eller av.
+const FLIP_FX = [['glid', 'Glid – sidan glider in'], ['blink', 'Blink – skärmen blinkar till'], ['bada', 'Glid och blink'], ['av', 'Ingen effekt']];
+function flipMode(){ const f = S.settings.flip; return FLIP_FX.some(x => x[0] === f) ? f : 'glid'; }
+// Startar blinket direkt och svarar om rörelsen ska glida
+function flipFx(dir){
+  const f = flipMode();
+  if (f === 'blink' || f === 'bada') flash(dir);
+  return f === 'glid' || f === 'bada';
+}
+function flash(dir){
+  const el = $('#vflash');
+  el.style.background = `linear-gradient(${dir > 0 ? 'to left' : 'to right'}, rgba(138,63,28,.45), rgba(138,63,28,.12) 45%, rgba(138,63,28,.12))`;
+  try { el.getAnimations().forEach(a => a.cancel()); el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 420, easing: 'ease-out' }); } catch {}
+}
+function slideIn(dir){
+  const { W } = stageSize(), dx = Math.round(Math.min(W * 0.3, 280)) * (dir > 0 ? 1 : -1);
+  const base = wrap.style.transform;
+  try { V.slideAnim = wrap.animate([{ transform: `${base} translateX(${dx}px)`, opacity: 0.3 }, { transform: base, opacity: 1 }], { duration: 280, easing: 'cubic-bezier(.2,.75,.25,1)' });
+    V.slideAnim.onfinish = () => { V.slideAnim = null; }; } catch {}
+}
+
 function go(delta, fromPan){
   if (V.stroke) return;
   if (!wrap.hidden && V.tall && !fromPan) {
     stopInertia();
     const stops = pageStops(), cur = -V.offY;
+    const fxAnim = () => flipFx(delta) ? 'slow' : true;
     if (stops.length) {
       // Bläddringspunkter: nästa punkt hamnar i skärmens överkant
-      if (delta > 0) { const t = stops.find(y => y > cur + 2); if (t != null) { goToStop(t); return; } }
-      else { const above = [0, ...stops].filter(y => y < cur - 2); if (above.length) { goToStop(above[above.length - 1]); return; } }
+      if (delta > 0) { const t = stops.find(y => y > cur + 2); if (t != null) { goToStop(t, fxAnim()); return; } }
+      else { const above = [0, ...stops].filter(y => y < cur - 2); if (above.length) { goToStop(above[above.length - 1], fxAnim()); return; } }
     } else {
       const { H } = stageSize(), stepY = Math.round(H * 0.9);
-      if (delta > 0 && V.offY > V.minY + 2) { V.offY = clampY(V.offY - stepY); placeWrap(true); return; }
-      if (delta < 0 && V.offY < -2) { V.offY = clampY(V.offY + stepY); placeWrap(true); return; }
+      if (delta > 0 && V.offY > V.minY + 2) { V.offY = clampY(V.offY - stepY); placeWrap(fxAnim()); return; }
+      if (delta < 0 && V.offY < -2) { V.offY = clampY(V.offY + stepY); placeWrap(fxAnim()); return; }
     }
   }
   const before = [V.qi, V.page];
@@ -1977,7 +2006,7 @@ function go(delta, fromPan){
     else if (V.qi > 0) { V.qi--; V.page = -1; }
     else { if (fromPan) { V.offY = clampY(V.offY); placeWrap(true); } toast('Första sidan'); return; }
   }
-  if (before[0] !== V.qi || before[1] !== V.page) { V.startAt = delta < 0 ? 'end' : 0; V.undo = []; V.redo = []; hideUndo(); showPage(); }
+  if (before[0] !== V.qi || before[1] !== V.page) { V.startAt = delta < 0 ? 'end' : 0; V.flipDir = delta; V.undo = []; V.redo = []; hideUndo(); showPage(); }
 }
 function jumpTo(qi){ V.qi = qi; V.page = 1; V.startAt = 0; V.undo = []; V.redo = []; hideUndo(); $('#vlist').hidden = true; showPage(); }
 
@@ -2053,10 +2082,12 @@ $('#vMore').onclick = () => {
   openModal(`<h2>Inställningar för visningen</h2>
     <label style="display:flex;gap:10px;align-items:center;min-height:44px"><input type="checkbox" id="setPencil" ${S.settings.pencilDraws ? 'checked' : ''} style="width:22px;height:22px"> Apple Pencil ritar alltid (fingret bläddrar)</label>
     <label style="display:flex;gap:10px;align-items:center;min-height:44px"><input type="checkbox" id="setFill" ${S.settings.fillWidth ? 'checked' : ''} style="width:22px;height:22px"> Liggande iPad: noten fyller bredden – dra med fingret för att scrolla</label>
+    <label class="field">Bläddringseffekt – syns när du bläddrar<select id="setFlip">${FLIP_FX.map(([v, t]) => `<option value="${v}" ${flipMode() === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
     <p style="font-size:14px;color:var(--muted)">Zooma in eller ut (50–400 %) genom att nypa med två fingrar och spara zoomen för noten i rutan som dyker upp. Bläddra: tryck i högra eller vänstra tredjedelen, svep åt sidan, eller använd en bläddringspedal (piltangenter / Page Up-Down). Tryck i mitten för att visa eller dölja verktygen.</p>
     <div class="actions"><button class="btn danger" id="setClear" style="margin-right:auto">Rensa sidans anteckningar</button><button class="btn danger" id="setClearStops">Ta bort sidans bläddringspunkter</button><button class="btn" id="setTempo">Läs av tempo från noten igen</button>${(S.noter[V.queue[V.qi]] || {}).zoom || Math.abs(V.zoom - 1) > 0.01 ? '<button class="btn" id="setZoomOrig">Återgå till originalstorlek</button>' : ''}<button class="btn primary" id="setOk">Klar</button></div>`);
   $('#setPencil').onchange = e => { S.settings.pencilDraws = e.target.checked; IDB.put('kv', 'settings', S.settings); };
   $('#setFill').onchange = e => { S.settings.fillWidth = e.target.checked; IDB.put('kv', 'settings', S.settings); showPage({ quiet: true }); };
+  $('#setFlip').onchange = e => { S.settings.flip = e.target.value; IDB.put('kv', 'settings', S.settings); if (e.target.value !== 'av') { if (flipFx(1)) slideIn(1); } };
   $('#setOk').onclick = closeModal;
   if ($('#setZoomOrig')) $('#setZoomOrig').onclick = () => { closeModal(); resetZoomToOriginal(); };
   $('#setTempo').onclick = () => { closeModal(); rereadTempo(); };
