@@ -125,7 +125,7 @@ body.alpha-pad .app{padding-right:44px}
 #vbar{position:absolute;left:0;right:0;top:0;background:rgba(250,248,244,.97);border-bottom:1px solid var(--line);
   padding:8px 10px;padding-top:max(8px,env(safe-area-inset-top));display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;box-shadow:0 4px 18px rgba(0,0,0,.18)}
 #vbar .grp{display:flex;gap:4px;align-items:center}
-#vbar .title{flex:1;min-width:140px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#vbar .title{flex:1;min-width:140px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
 #vbar .title small{font-weight:400;color:var(--muted);margin-left:6px}
 .tb{border:1px solid var(--line);background:#fff;border-radius:9px;min-width:44px;height:44px;display:inline-grid;place-items:center;padding:0 8px;font-size:15px}
 .tb[aria-pressed=true]{background:var(--fg);color:#fff;border-color:var(--fg)}
@@ -201,7 +201,7 @@ body.alpha-pad .app{padding-right:44px}
     <div class="grp">
       <button class="tb" id="vClose" title="Stäng">‹ Stäng</button>
     </div>
-    <div class="title" id="vTitle"></div>
+    <div class="title" id="vTitle" title="Tryck för att byta namn"></div>
     <div class="grp">
       <button class="tb" id="vPrev" title="Föregående sida">◀</button>
       <span id="vPage" style="min-width:64px;text-align:center;font-variant-numeric:tabular-nums"></span>
@@ -268,7 +268,7 @@ import * as pdfjsLib from './pdf.min.mjs';
 
 // 'artifact' = versionen i Claude (molnlagring), 'pwa' = hemskärmsappen (allt sparas på iPaden). Sätts av byggskriptet.
 const APP_MODE = 'pwa';
-const APP_VERSION = '2026.11.19c';
+const APP_VERSION = '2026.11.19d';
 const LOCAL = APP_MODE === 'pwa';
 
 const BASE = document.baseURI;
@@ -1046,10 +1046,12 @@ function renderListItems(){
   el.innerHTML = l.verk.map((id, i) => {
     const n = S.noter[id];
     return `<div class="row"><span class="handle" data-drag="${i}" title="Dra för att flytta">≡</span><span class="num">${i + 1}.</span><button class="main" data-i="${i}"><div class="t">${esc(n ? n.titel : 'Borttagen not')}</div><div class="s">${n ? notSub(n) : ''}</div></button>` +
+      (n ? `<button class="iconbtn" data-rn="${esc(id)}" title="Byt namn på noten">✎</button>` : '') +
       `<button class="iconbtn" data-rm="${i}" title="Ta bort ur listan">✕</button></div>`;
   }).join('');
   el.querySelectorAll('[data-i]').forEach(b => b.onclick = () => playList(l.id, +b.dataset.i));
   el.querySelectorAll('[data-drag]').forEach(h => h.addEventListener('pointerdown', e => startListDrag(e, h, +h.dataset.drag, l.id)));
+  el.querySelectorAll('[data-rn]').forEach(b => b.onclick = () => renameNot(b.dataset.rn, renderListItems));
   el.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { const m = S.listor[l.id]; if (!m) return; m.verk = m.verk.filter((_, k) => k !== +b.dataset.rm); writeList(l.id); renderListItems(); });
 }
 
@@ -1119,12 +1121,28 @@ function confirmBox(title, html, okText, onOk){
   $('#mNo').onclick = closeModal; $('#mYes').onclick = () => { closeModal(); onOk(); };
 }
 
+// Byt namn på en not (från låtlistan eller visningen)
+function renameNot(id, after){
+  const n = S.noter[id]; if (!n) return;
+  openModal(`<h2>Byt namn</h2>
+    <label class="field">Namn<input id="rnName" value="${esc(n.titel)}"></label>
+    <p style="font-size:13px;color:var(--muted);margin-top:8px">Filen hette från början ”${esc(n.filnamn || n.titel)}”.</p>
+    <div class="actions"><button class="btn" id="rnNo">Avbryt</button><button class="btn primary" id="rnOk">Spara</button></div>`);
+  setTimeout(() => { const i = $('#rnName'); if (i) { i.focus(); i.select(); } }, 50);
+  const ok = () => {
+    const v = $('#rnName').value.trim(); const m = S.noter[id];
+    if (m && v && v !== m.titel) { m.titel = v.slice(0, 200); writeNot(id); }
+    closeModal(); render(); if (after) after();
+  };
+  $('#rnNo').onclick = closeModal; $('#rnOk').onclick = ok;
+  $('#rnName').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); ok(); } e.stopPropagation(); };
+}
 function editNot(id){
   const n = S.noter[id]; if (!n) return;
   const inLists = Object.values(S.listor).filter(l => l.verk.includes(id)).map(l => l.namn);
   const molnTxt = n.asset ? 'Sparad i molnet.' : (n.molnfel ? 'Filen är för stor för molnet (max 20 MB) och finns bara på den här enheten.' : 'Inte uppladdad till molnet än.');
   openModal(`<h2>Ändra not</h2>
-    <label class="field">Titel<input id="eTitel" value="${esc(n.titel)}"></label>
+    <label class="field">Namn <span style="font-size:13px">– så heter noten i biblioteket, låtlistorna och visningen</span><input id="eTitel" value="${esc(n.titel)}"></label>
     <div class="field" style="margin-top:10px">Körer<div id="eKor"></div></div>
     <p style="margin-top:12px;font-size:14px;color:var(--muted)">${esc(n.filnamn)} · ${n.sidor} s. · ${esc(fmtMB(n.storlek))}<br>${esc(molnTxt)} ${S.cached.has(id) ? 'Finns offline på enheten.' : ''}
     ${inLists.length ? '<br>Finns i: ' + esc(inLists.join(', ')) : ''}</p>
@@ -1984,6 +2002,7 @@ function updateBar(){
   $('#vFinger').setAttribute('aria-pressed', V.finger);
 }
 $('#vClose').onclick = closeViewer;
+$('#vTitle').onclick = () => { const id = V.queue[V.qi]; if (id) renameNot(id, () => { updateBar(); if (!$('#vlist').hidden) renderVList(); }); };
 $('#vPrev').onclick = () => go(-1);
 $('#vNext').onclick = () => go(1);
 document.querySelectorAll('#toolGrp [data-tool]').forEach(b => b.onclick = () => {
