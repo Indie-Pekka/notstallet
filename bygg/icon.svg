@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#8a3f1c"/>
+  <g fill="#fff">
+    <!-- notställ: skiva -->
+    <rect x="96" y="120" width="320" height="200" rx="18" fill="none" stroke="#fff" stroke-width="22"/>
+    <rect x="132" y="168" width="248" height="10" rx="5" opacity=".9"/>
+    <rect x="132" y="204" width="248" height="10" rx="5" opacity=".9"/>
+    <rect x="132" y="240" width="248" height="10" rx="5" opacity=".9"/>
+    <rect x="132" y="276" width="190" height="10" rx="5" opacity=".9"/>
+    <!-- fot -->
+    <rect x="245" y="320" width="22" height="120" rx="8"/>
+    <path d="M256 430 L170 460 L176 476 L256 450 L336 476 L342 460 Z"/>
+    <!-- not -->
+    <ellipse cx="318" cy="252" rx="30" ry="22" transform="rotate(-20 318 252)" fill="#f3d3b8"/>
+    <rect x="340" y="120" width="12" height="134" rx="5" fill="#f3d3b8"/>
+    <path d="M346 120 C390 140 404 170 382 204 C394 170 378 150 346 146 Z" fill="#f3d3b8"/>
+  </g>
+</svg>
