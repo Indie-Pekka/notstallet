@@ -62,6 +62,11 @@ header.top h1{font-size:24px;margin:0;letter-spacing:-.01em;flex:1}
 .check{width:26px;height:26px;border-radius:50%;border:2px solid var(--line);flex:0 0 26px;display:grid;place-items:center;font-size:15px;color:#fff;margin-left:14px}
 .check.on{background:var(--acc);border-color:var(--acc)}
 .check.ok{background:var(--ok);border-color:var(--ok)}
+.btn.good{color:var(--ok);border-color:#bcdcc8}
+.btn.good.on{background:var(--ok);border-color:var(--ok);color:#fff}
+.btn.annb{color:#2c5aa0;border-color:#c6d5ee}
+.btn.annb.on{background:#2c5aa0;border-color:#2c5aa0;color:#fff}
+.badge.ann{background:#e6eefb;color:#2c5aa0}
 .row.done .t,.row.done .s{opacity:.55}
 .secthead{font-size:13px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;padding:14px 14px 6px}
 .row.sel{background:var(--acc-soft)}
@@ -302,7 +307,7 @@ import * as pdfjsLib from './pdf.min.mjs';
 
 // 'artifact' = versionen i Claude (molnlagring), 'pwa' = hemskärmsappen (allt sparas på iPaden). Sätts av byggskriptet.
 const APP_MODE = 'pwa';
-const APP_VERSION = '2026.11.20g';
+const APP_VERSION = '2026.11.20h';
 const LOCAL = APP_MODE === 'pwa';
 
 const BASE = document.baseURI;
@@ -453,6 +458,7 @@ function cleanNot(id, d){
     storlek: +d.storlek || 0, sidor: +d.sidor || 0, asset: typeof d.asset === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(d.asset) ? d.asset : null,
     sha: typeof d.sha === 'string' && /^[0-9a-f]{64}$/.test(d.sha) ? d.sha : '',
     verOk: d.verOk ? 1 : undefined, // kontrollerad i fliken Versioner – alla versioner ska finnas kvar
+    medNot: d.medNot ? 1 : undefined, // pdf:en har inbrända anteckningar (t.ex. export från forScore)
     zoom: cleanZoom(d.zoom),
     tempo: +d.tempo >= 20 && +d.tempo <= 300 ? Math.round(+d.tempo) : undefined,
     tempoKoll: d.tempoKoll === true ? 1 : (+d.tempoKoll > 0 ? +d.tempoKoll : undefined), // version av avläsningen som har körts
@@ -649,7 +655,7 @@ function sortedNoter(filter = S.search, kor = S.korFilter, onlyFree = false){
     .sort((a, b) => collator.compare(a.titel, b.titel));
 }
 function notSub(n){
-  const parts = [korerOf(n).join(', ') || 'Ingen kör', n.sidor ? n.sidor + ' s.' : ''].filter(Boolean).join(' · ');
+  const parts = [korerOf(n).join(', ') || 'Ingen kör', n.sidor ? n.sidor + ' s.' : '', n.medNot ? 'med noteringar' : ''].filter(Boolean).join(' · ');
   if (LOCAL) return esc(parts);
   let badge = '';
   if (!S.cached.has(n.id)) badge = n.asset ? '<span class="badge">i molnet</span>' : '<span class="badge warn">på annan enhet</span>';
@@ -779,8 +785,8 @@ function renderVer(){
   const q = fold($('#verSearch').value).trim();
   const shown = groups.filter(g => !q || g.key.includes(q));
   const row = g => { const k = [...new Set(g.versions.flatMap(v => korerOf(v.n)))].join(', ');
-    return `<div class="row${g.ok ? ' done' : ''}"><span class="check${g.ok ? ' ok' : ''}" data-vok="${esc(g.key)}" role="checkbox" aria-checked="${g.ok}" title="Kontrollerad – alla versioner ska finnas kvar">${g.ok ? '✓' : ''}</span>
-      <button class="main" data-ver="${esc(g.key)}"><div class="t">${esc(g.title)}</div><div class="s">${g.versions.length} versioner${k ? ' · ' + esc(k) : ''}${g.ok ? ' · kontrollerad' : ''}</div></button><span style="padding-right:14px;color:var(--muted)">›</span></div>`; };
+    return `<div class="row${g.ok ? ' done' : ''}"><button class="main" data-ver="${esc(g.key)}"><div class="t">${esc(g.title)}</div><div class="s">${g.versions.length} versioner${k ? ' · ' + esc(k) : ''}</div></button>
+      <button class="btn small good${g.ok ? ' on' : ''}" data-vok="${esc(g.key)}" aria-pressed="${g.ok}" title="Alla versioner ska finnas kvar">${g.ok ? '✓ ' : ''}Kontrollerad</button><span style="padding:0 14px 0 8px;color:var(--muted)">›</span></div>`; };
   const open2 = shown.filter(g => !g.ok), done = shown.filter(g => g.ok);
   $('#verList').innerHTML = !groups.length ? `<div class="empty">Inga titlar med flera versioner hittades.</div>`
     : !shown.length ? `<div class="empty">Ingen titel matchar sökningen.</div>`
@@ -804,20 +810,22 @@ function renderVerDetail(g){
     <div class="detailhead"><button class="btn" id="verBack">‹ Alla titlar</button></div>
     <h2 style="margin:4px 0 4px">${esc(g.title)}</h2>
     <p style="color:var(--muted);margin:0 0 12px;font-size:15px">${g.versions.length} versioner, äldst överst. Bocka för de du vill ta bort.</p>
-    <label class="row${g.ok ? ' sel' : ''}" style="cursor:pointer;margin-bottom:12px;border-radius:12px"><span class="check${g.ok ? ' ok' : ''}" id="verOkBox">${g.ok ? '✓' : ''}</span>
-      <span class="main" style="padding:12px 14px"><div class="t">Kontrollerad – alla versioner ska finnas kvar</div><div class="s">Titeln läggs under ”Kontrollerade” i listan. Laddar du upp en ny version kommer den tillbaka.</div></span></label>
+    <div style="display:flex;gap:12px;align-items:center;margin:0 0 14px"><button class="btn good${g.ok ? ' on' : ''}" id="verOkBtn" aria-pressed="${g.ok}">${g.ok ? '✓ ' : ''}Kontrollerad</button>
+      <span style="color:var(--muted);font-size:14px">${g.ok ? 'Alla versioner behålls. Laddar du upp en ny version kommer titeln tillbaka.' : 'Tryck när du bestämt att alla versioner ska finnas kvar.'}</span></div>
     <div class="list">${g.versions.map((v, i) => {
       const n = v.n, on = S.verSel.includes(n.id), ls = listsWith(n.id);
       const info = [korerOf(n).join(', ') || 'Ingen kör', n.sidor ? n.sidor + ' s.' : '', 'tillagd ' + fmtDate(n.skapad)].filter(Boolean).join(' · ');
       const extra = [ls.length ? 'i ' + ls.map(l => '”' + l.namn + '”').join(', ') : '', hasAnn(n.id) ? 'har anteckningar' : ''].filter(Boolean).join(' · ');
       return `<div class="row${on ? ' sel' : ''}"><span class="check${on ? ' on' : ''}" data-vsel="${esc(n.id)}">${on ? '✓' : ''}</span>
-        <button class="main" data-vsel="${esc(n.id)}"><div class="t">${esc(n.titel)}${i === last ? '<span class="badge ok">senaste</span>' : ''}</div>
+        <button class="main" data-vsel="${esc(n.id)}"><div class="t">${esc(n.titel)}${i === last ? '<span class="badge ok">senaste</span>' : ''}${n.medNot ? '<span class="badge ann">med noteringar</span>' : ''}</div>
         <div class="s">${esc(info)}</div>${extra ? `<div class="s">${esc(extra)}</div>` : ''}</button>
-        <button class="btn small" data-vopen="${esc(n.id)}">Öppna</button></div>`;
+        <button class="btn small annb${n.medNot ? ' on' : ''}" data-vann="${esc(n.id)}" aria-pressed="${!!n.medNot}" title="Pdf:en har inbrända noteringar, t.ex. från forScore">${n.medNot ? '✓ ' : ''}Med noteringar</button>
+        <button class="btn small" data-vopen="${esc(n.id)}" style="margin:0 10px 0 6px">Öppna</button></div>`;
     }).join('')}</div>
     <div class="tools" style="margin-top:12px"><span style="flex:1"></span><button class="btn danger" id="verDel" ${S.verSel.length ? '' : 'disabled'}>Ta bort valda${S.verSel.length ? ' (' + S.verSel.length + ')' : ''}</button></div>`;
   $('#verBack').onclick = () => { S.verOpen = null; renderVer(); };
-  $('#verOkBox').parentElement.onclick = e => { e.preventDefault(); setVerOk(g, !g.ok); renderVer(); };
+  $('#verOkBtn').onclick = () => { setVerOk(g, !g.ok); renderVer(); };
+  $('#verDetail').querySelectorAll('[data-vann]').forEach(b => b.onclick = () => { const n = S.noter[b.dataset.vann]; if (!n) return; if (n.medNot) delete n.medNot; else n.medNot = 1; writeNot(n.id); renderVer(); });
   $('#verDetail').querySelectorAll('[data-vsel]').forEach(b => b.onclick = () => { const id = b.dataset.vsel; S.verSel = S.verSel.includes(id) ? S.verSel.filter(x => x !== id) : [...S.verSel, id]; renderVer(); });
   $('#verDetail').querySelectorAll('[data-vopen]').forEach(b => b.onclick = () => openViewer([b.dataset.vopen], 0, 1, null));
   $('#verDel').onclick = () => confirmDeleteVersions(g, [...S.verSel]);
@@ -1265,7 +1273,7 @@ function pickForList(listId){
     all.onclick = () => { addIds(missing.map(n => n.id)); draw(); };
     $('#pkList').innerHTML = items.length ? items.map((n, i) => {
       const c = l.verk.filter(x => x === n.id).length;
-      return `<button class="row pickrow" data-add="${esc(n.id)}"${!src && !byNew ? ` data-l="${firstLetter(n.titel)}"` : ''}>${src ? `<span class="num" style="width:40px">${i + 1}.</span>` : ''}<span class="main"><div class="t">${esc(n.titel)}</div><div class="s">${esc([korerOf(n).join(', ') || 'Ingen kör', byNew && n.skapad ? 'uppladdad ' + fmtDate(n.skapad) : ''].filter(Boolean).join(' · '))}${c ? ' · <b>i listan' + (c > 1 ? ' ×' + c : '') + '</b>' : ''}</div></span><span class="plus">＋</span></button>`;
+      return `<button class="row pickrow" data-add="${esc(n.id)}"${!src && !byNew ? ` data-l="${firstLetter(n.titel)}"` : ''}>${src ? `<span class="num" style="width:40px">${i + 1}.</span>` : ''}<span class="main"><div class="t">${esc(n.titel)}</div><div class="s">${esc([korerOf(n).join(', ') || 'Ingen kör', n.medNot ? 'med noteringar' : '', byNew && n.skapad ? 'uppladdad ' + fmtDate(n.skapad) : ''].filter(Boolean).join(' · '))}${c ? ' · <b>i listan' + (c > 1 ? ' ×' + c : '') + '</b>' : ''}</div></span><span class="plus">＋</span></button>`;
     }).join('') : `<div class="empty">Inga noter hittades.</div>`;
     pkAlpha.draw(!src && !byNew);
     $('#pkList').querySelectorAll('[data-add]').forEach(b => b.onclick = () => {
