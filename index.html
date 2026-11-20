@@ -154,7 +154,7 @@ body.alpha-pad .app{padding-right:44px}
 #qUndo.show{opacity:1;pointer-events:auto}
 #vtoast{position:absolute;left:50%;bottom:22px;transform:translateX(-50%);background:rgba(0,0,0,.72);color:#fff;border-radius:999px;padding:7px 16px;font-size:15px;pointer-events:none;opacity:0;transition:opacity .25s}
 #vtoast.show{opacity:1}
-#vlist{position:absolute;right:0;top:0;bottom:0;width:min(360px,90vw);background:var(--card);box-shadow:-8px 0 30px rgba(0,0,0,.3);overflow:auto;padding:12px}
+#vlist{position:absolute;left:0;top:0;bottom:0;width:min(360px,90vw);background:var(--card);box-shadow:8px 0 30px rgba(0,0,0,.3);overflow:auto;padding:12px}
 #vlist h3{margin:4px 6px 10px}
 #vlist button.item{display:block;width:100%;text-align:left;border:0;border-bottom:1px solid var(--line);background:none;padding:12px 8px;min-height:48px}
 #vlist button.item[aria-current=true]{background:var(--acc-soft);font-weight:600}
@@ -218,6 +218,7 @@ body.alpha-pad .app{padding-right:44px}
   <div id="vbar" hidden>
     <div class="grp">
       <button class="tb" id="vClose" title="Stäng">‹ Stäng</button>
+      <button class="tb" id="vListBtn" title="Låtlistan">☰ Lista</button>
     </div>
     <div class="title" id="vTitle" title="Tryck för att byta namn"></div>
     <div class="grp">
@@ -232,7 +233,6 @@ body.alpha-pad .app{padding-right:44px}
     </div>
     <div class="grp">
       <button class="tb" id="vMetro" title="Metronom">♩ Metronom</button>
-      <button class="tb" id="vListBtn" title="Låtlistan">☰ Lista</button>
       <button class="tb" id="vMore" title="Mer">⋯</button>
     </div>
   </div>
@@ -293,7 +293,7 @@ import * as pdfjsLib from './pdf.min.mjs';
 
 // 'artifact' = versionen i Claude (molnlagring), 'pwa' = hemskärmsappen (allt sparas på iPaden). Sätts av byggskriptet.
 const APP_MODE = 'pwa';
-const APP_VERSION = '2026.11.20a';
+const APP_VERSION = '2026.11.20b';
 const LOCAL = APP_MODE === 'pwa';
 
 const BASE = document.baseURI;
@@ -1597,7 +1597,7 @@ function annKey(id = V.queue[V.qi], page = V.page){ return id + '_p' + page; }
 function openViewer(queue, qi, page, listId){
   Object.assign(V, { open: true, queue, qi, page, listId, undo: [], redo: [], stroke: null, gesture: null, tool: V.tool === 'erase' ? 'pen' : V.tool });
   $('#viewer').hidden = false; showBar(false);
-  $('#vListBtn').hidden = !listId && queue.length < 2;
+  $('#vListBtn').style.visibility = (!listId && queue.length < 2) ? 'hidden' : '';
   $('#vlist').hidden = true;
   showPage();
 }
