@@ -153,9 +153,10 @@ body.alpha-pad .app{padding-right:44px}
   opacity:0;pointer-events:none;transition:opacity .25s;z-index:5;touch-action:manipulation}
 #qUndo.show{opacity:1;pointer-events:auto}
 #qSwap{position:absolute;left:14px;bottom:calc(env(safe-area-inset-bottom) + 14px);width:56px;height:56px;border-radius:50%;border:0;
-  background:rgba(31,28,24,.72);color:#fff;font-size:24px;display:grid;place-items:center;box-shadow:0 4px 14px rgba(0,0,0,.3);z-index:5;touch-action:manipulation}
+  background:rgba(31,28,24,.72);color:#fff;font-size:24px;display:grid;place-items:center;box-shadow:0 4px 14px rgba(0,0,0,.3);z-index:5;touch-action:manipulation;
+  opacity:0;pointer-events:none;transition:opacity .25s}
+#qSwap.show{opacity:1;pointer-events:auto}
 #qSwap.erase{background:var(--acc)}
-#qSwap[hidden]{display:none}
 #vtoast{position:absolute;left:50%;bottom:22px;transform:translateX(-50%);background:rgba(0,0,0,.72);color:#fff;border-radius:999px;padding:7px 16px;font-size:15px;pointer-events:none;opacity:0;transition:opacity .25s}
 #vtoast.show{opacity:1}
 #vlist{position:absolute;z-index:9;width:min(360px,90vw);max-height:70vh;background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.25);overflow:auto;padding:12px}
@@ -254,7 +255,7 @@ body.alpha-pad .app{padding-right:44px}
     <button class="tpi" id="vFinger"><span class="ic">☝︎</span>Fingret ritar också</button>
   </div>
   <button id="qUndo" title="Ångra" aria-label="Ångra">↶</button>
-  <button id="qSwap" title="Växla mellan penna och sudd" aria-label="Växla mellan penna och sudd" hidden></button>
+  <button id="qSwap" title="Växla mellan penna och sudd" aria-label="Växla mellan penna och sudd"></button>
   <div id="metroDot" hidden></div>
   <div id="metro" hidden>
     <div class="mrow">
@@ -298,7 +299,7 @@ import * as pdfjsLib from './pdf.min.mjs';
 
 // 'artifact' = versionen i Claude (molnlagring), 'pwa' = hemskärmsappen (allt sparas på iPaden). Sätts av byggskriptet.
 const APP_MODE = 'pwa';
-const APP_VERSION = '2026.11.20e';
+const APP_VERSION = '2026.11.20f';
 const LOCAL = APP_MODE === 'pwa';
 
 const BASE = document.baseURI;
@@ -1607,7 +1608,7 @@ function openViewer(queue, qi, page, listId){
   showPage();
 }
 function closeViewer(){
-  V.open = false; V.token++; hideUndo(); toolPop(false); $('#zoomPill').hidden = true; mStop(); $('#metro').hidden = true; $('#metroDot').hidden = true; V.zoomFor = null; V.pinch = null; V.touches.clear();
+  V.open = false; V.token++; hideUndo(); hideSwap(); toolPop(false); $('#zoomPill').hidden = true; mStop(); $('#metro').hidden = true; $('#metroDot').hidden = true; V.zoomFor = null; V.pinch = null; V.touches.clear();
   $('#viewer').hidden = true;
   for (const p of pageCache.values()) p.then(r => { r.cv.width = 0; r.cv.height = 0; }).catch(() => {});
   pageCache.clear(); slot.replaceChildren();
@@ -2061,7 +2062,7 @@ function updateBar(){
   $('#vTools').setAttribute('aria-pressed', !!T);
   // Växlingsknappen i nedre vänstra hörnet: syns när man ritar eller suddar
   const sw = $('#qSwap');
-  sw.hidden = !['pen', 'hl', 'erase'].includes(V.tool);
+  if (!SWAP_TOOLS.includes(V.tool)) hideSwap();
   sw.classList.toggle('erase', V.tool === 'erase');
   sw.textContent = V.tool === 'erase' ? '⌫' : V.tool === 'hl' ? '▍' : '✎';
   $('#vUndo').disabled = !V.undo.length; $('#vRedo').disabled = !V.redo.length;
@@ -2350,7 +2351,17 @@ function toPage(e){
 }
 function insidePage(e){ const [, , x, y, r] = toPage(e); return x >= -20 && y >= -20 && x <= r.width + 20 && y <= r.height + 20; }
 
-function pushUndo(a){ V.undo.push(a); if (V.undo.length > 100) V.undo.shift(); V.redo = []; flashUndo(); }
+function pushUndo(a){ V.undo.push(a); if (V.undo.length > 100) V.undo.shift(); V.redo = []; flashUndo(); flashSwap(); }
+// Växlingsknappen penna ⇄ sudd dyker upp först när man skriver eller suddar, och tonas bort efter en stund utan pennan
+const SWAP_TOOLS = ['pen', 'hl', 'erase'], SWAP_MS = 10000;
+let qSwapT = null;
+function flashSwap(){
+  const b = $('#qSwap'); clearTimeout(qSwapT);
+  if (!V.open || !SWAP_TOOLS.includes(V.tool)) { b.classList.remove('show'); return; }
+  b.classList.add('show');
+  qSwapT = setTimeout(() => b.classList.remove('show'), SWAP_MS);
+}
+function hideSwap(){ clearTimeout(qSwapT); $('#qSwap').classList.remove('show'); }
 // Snabbångra: en liten knapp uppe till höger som syns i 5 sekunder efter varje ändring
 let qUndoT = null;
 function flashUndo(){
@@ -2368,7 +2379,7 @@ $('#qSwap').addEventListener('click', e => {
   e.stopPropagation();
   if (V.tool === 'erase') V.tool = V.lastDraw || 'pen';
   else { V.lastDraw = V.tool === 'hl' ? 'hl' : 'pen'; V.tool = 'erase'; }
-  updateBar();
+  updateBar(); flashSwap();
   toast(V.tool === 'erase' ? 'Sudd' : V.tool === 'hl' ? 'Markera' : 'Penna');
 });
 $('#qUndo').addEventListener('click', e => { e.stopPropagation(); undo(); });
