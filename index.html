@@ -154,7 +154,7 @@ body.alpha-pad .app{padding-right:44px}
 #qUndo.show{opacity:1;pointer-events:auto}
 #vtoast{position:absolute;left:50%;bottom:22px;transform:translateX(-50%);background:rgba(0,0,0,.72);color:#fff;border-radius:999px;padding:7px 16px;font-size:15px;pointer-events:none;opacity:0;transition:opacity .25s}
 #vtoast.show{opacity:1}
-#vlist{position:absolute;left:0;top:0;bottom:0;width:min(360px,90vw);background:var(--card);box-shadow:8px 0 30px rgba(0,0,0,.3);overflow:auto;padding:12px}
+#vlist{position:absolute;z-index:9;width:min(360px,90vw);max-height:70vh;background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.25);overflow:auto;padding:12px}
 #vlist h3{margin:4px 6px 10px}
 #vlist button.item{display:block;width:100%;text-align:left;border:0;border-bottom:1px solid var(--line);background:none;padding:12px 8px;min-height:48px}
 #vlist button.item[aria-current=true]{background:var(--acc-soft);font-weight:600}
@@ -293,7 +293,7 @@ import * as pdfjsLib from './pdf.min.mjs';
 
 // 'artifact' = versionen i Claude (molnlagring), 'pwa' = hemskärmsappen (allt sparas på iPaden). Sätts av byggskriptet.
 const APP_MODE = 'pwa';
-const APP_VERSION = '2026.11.20b';
+const APP_VERSION = '2026.11.20c';
 const LOCAL = APP_MODE === 'pwa';
 
 const BASE = document.baseURI;
@@ -2036,7 +2036,7 @@ let toastT = null;
 function toast(t){ const el = $('#vtoast'); el.textContent = t; el.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => el.classList.remove('show'), 1300); }
 
 /* ---------- Verktygsrad ---------- */
-function showBar(on){ V.barShown = on; $('#vbar').hidden = !on; if (!on) toolPop(false); $('#metroDot').style.top = on ? ($('#vbar').offsetHeight + 14) + 'px' : ''; const b = $('#qUndo'); if (b.classList.contains('show')) b.style.top = on ? ($('#vbar').offsetHeight + 12) + 'px' : ''; }
+function showBar(on){ V.barShown = on; $('#vbar').hidden = !on; if (!on) { toolPop(false); $('#vlist').hidden = true; } $('#metroDot').style.top = on ? ($('#vbar').offsetHeight + 14) + 'px' : ''; const b = $('#qUndo'); if (b.classList.contains('show')) b.style.top = on ? ($('#vbar').offsetHeight + 12) + 'px' : ''; }
 function updateBar(){
   if (!V.open) return;
   const n = S.noter[V.queue[V.qi]];
@@ -2124,8 +2124,21 @@ $('#vListBtn').onclick = () => {
   const el = $('#vlist');
   if (!el.hidden) { el.hidden = true; return; }
   renderVList();
-  el.hidden = false;
+  el.hidden = false; placeVList();
 };
+// Låtlistan fälls ut under Lista-knappen, så Stäng och resten av raden går att nå
+function placeVList(){
+  const el = $('#vlist'); if (el.hidden) return;
+  const r = $('#vListBtn').getBoundingClientRect();
+  el.style.top = (r.bottom + 6) + 'px';
+  el.style.left = Math.max(8, Math.min(window.innerWidth - el.offsetWidth - 8, r.left)) + 'px';
+  el.style.maxHeight = Math.max(200, window.innerHeight - r.bottom - 20) + 'px';
+}
+window.addEventListener('resize', placeVList);
+document.addEventListener('pointerdown', e => {
+  if ($('#vlist').hidden) return;
+  if (e.target.closest('#vbar') && !e.target.closest('#vListBtn')) $('#vlist').hidden = true;
+}, true);
 $('#vMore').onclick = () => {
   openModal(`<h2>Inställningar för visningen</h2>
     <label style="display:flex;gap:10px;align-items:center;min-height:44px"><input type="checkbox" id="setPencil" ${S.settings.pencilDraws ? 'checked' : ''} style="width:22px;height:22px"> Apple Pencil ritar alltid (fingret bläddrar)</label>
