@@ -133,6 +133,21 @@ body.alpha-pad .app{padding-right:44px}
 .tb[aria-pressed=true]{background:var(--fg);color:#fff;border-color:var(--fg)}
 .sw{width:30px;height:30px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px var(--line)}
 .sw[aria-pressed=true]{box-shadow:0 0 0 3px var(--acc)}
+#vTools{min-width:172px;justify-content:start;display:inline-flex;gap:7px;padding:0 10px}
+#vTools .car{margin-left:auto;font-size:12px;opacity:.7}
+#vTools .dot{width:14px;height:14px;border-radius:50%;box-shadow:0 0 0 1.5px #fff}
+#vTools[aria-expanded=true]{box-shadow:0 0 0 3px var(--acc-soft)}
+#toolPop{position:absolute;z-index:9;width:250px;background:rgba(250,248,244,.99);border:1px solid var(--line);border-radius:14px;padding:8px;box-shadow:0 10px 30px rgba(0,0,0,.25);display:flex;flex-direction:column;gap:4px}
+#toolPop[hidden]{display:none}
+.tpi{display:flex;align-items:center;gap:10px;width:100%;min-height:48px;border:0;border-radius:10px;background:none;padding:0 12px;font-size:16px;text-align:left;cursor:pointer}
+.tpi .ic{width:22px;text-align:center}
+.tpi[aria-pressed=true]{background:var(--fg);color:#fff}
+.tpsec{border-top:1px solid var(--line);border-bottom:1px solid var(--line);margin:4px 0;padding:10px 4px;display:flex;flex-direction:column;gap:10px;transition:opacity .15s}
+.tpsec.off{opacity:.3;pointer-events:none}
+.tprow{display:flex;gap:12px;justify-content:space-around}
+.seg{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.seg button{flex:1;min-height:40px;border:0;background:#fff;font-size:15px}
+.seg button[aria-pressed=true]{background:var(--fg);color:#fff}
 #qUndo{position:absolute;right:14px;top:calc(env(safe-area-inset-top) + 14px);width:56px;height:56px;border-radius:50%;border:0;
   background:rgba(31,28,24,.82);color:#fff;font-size:28px;display:grid;place-items:center;box-shadow:0 4px 14px rgba(0,0,0,.3);
   opacity:0;pointer-events:none;transition:opacity .25s;z-index:5;touch-action:manipulation}
@@ -210,22 +225,29 @@ body.alpha-pad .app{padding-right:44px}
       <span id="vPage" style="min-width:64px;text-align:center;font-variant-numeric:tabular-nums"></span>
       <button class="tb" id="vNext" title="Nästa sida">▶</button>
     </div>
-    <div class="grp" id="toolGrp">
-      <button class="tb" data-tool="pen" title="Penna">✎ Penna</button>
-      <button class="tb" data-tool="hl" title="Överstrykning">▍Markera</button>
-      <button class="tb" data-tool="erase" title="Sudd">⌫ Sudd</button>
-      <button class="tb" data-tool="stop" title="Bläddringspunkt – var nästa vy börjar i liggande läge">⤓ Bläddringspunkt</button>
-    </div>
-    <div class="grp" id="colorGrp"></div>
     <div class="grp">
-      <button class="tb" id="vWidth" title="Linjetjocklek">Fin</button>
+      <button class="tb" id="vTools" aria-expanded="false" aria-haspopup="true" title="Ritverktyg"></button>
       <button class="tb" id="vUndo" title="Ångra">↶</button>
       <button class="tb" id="vRedo" title="Gör om">↷</button>
-      <button class="tb" id="vFinger" title="Låt fingret rita">☝︎ Finger ritar</button>
+    </div>
+    <div class="grp">
       <button class="tb" id="vMetro" title="Metronom">♩ Metronom</button>
       <button class="tb" id="vListBtn" title="Låtlistan">☰ Lista</button>
       <button class="tb" id="vMore" title="Mer">⋯</button>
     </div>
+  </div>
+  <div id="toolPop" hidden>
+    <div id="toolGrp">
+      <button class="tpi" data-tool="pen"><span class="ic">✎</span>Penna</button>
+      <button class="tpi" data-tool="hl"><span class="ic">▍</span>Markera</button>
+      <button class="tpi" data-tool="erase"><span class="ic">⌫</span>Sudd</button>
+      <button class="tpi" data-tool="stop"><span class="ic">⤓</span>Bläddringspunkt</button>
+    </div>
+    <div class="tpsec" id="tpStyle">
+      <div class="tprow" id="colorGrp"></div>
+      <div class="seg" id="vWidth"><button data-w="fin">Fin</button><button data-w="grov">Grov</button></div>
+    </div>
+    <button class="tpi" id="vFinger"><span class="ic">☝︎</span>Fingret ritar också</button>
   </div>
   <button id="qUndo" title="Ångra" aria-label="Ångra">↶</button>
   <div id="metroDot" hidden></div>
@@ -271,7 +293,7 @@ import * as pdfjsLib from './pdf.min.mjs';
 
 // 'artifact' = versionen i Claude (molnlagring), 'pwa' = hemskärmsappen (allt sparas på iPaden). Sätts av byggskriptet.
 const APP_MODE = 'pwa';
-const APP_VERSION = '2026.11.19e';
+const APP_VERSION = '2026.11.20a';
 const LOCAL = APP_MODE === 'pwa';
 
 const BASE = document.baseURI;
@@ -1580,7 +1602,7 @@ function openViewer(queue, qi, page, listId){
   showPage();
 }
 function closeViewer(){
-  V.open = false; V.token++; hideUndo(); $('#zoomPill').hidden = true; mStop(); $('#metro').hidden = true; $('#metroDot').hidden = true; V.zoomFor = null; V.pinch = null; V.touches.clear();
+  V.open = false; V.token++; hideUndo(); toolPop(false); $('#zoomPill').hidden = true; mStop(); $('#metro').hidden = true; $('#metroDot').hidden = true; V.zoomFor = null; V.pinch = null; V.touches.clear();
   $('#viewer').hidden = true;
   for (const p of pageCache.values()) p.then(r => { r.cv.width = 0; r.cv.height = 0; }).catch(() => {});
   pageCache.clear(); slot.replaceChildren();
@@ -2014,7 +2036,7 @@ let toastT = null;
 function toast(t){ const el = $('#vtoast'); el.textContent = t; el.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => el.classList.remove('show'), 1300); }
 
 /* ---------- Verktygsrad ---------- */
-function showBar(on){ V.barShown = on; $('#vbar').hidden = !on; $('#metroDot').style.top = on ? ($('#vbar').offsetHeight + 14) + 'px' : ''; const b = $('#qUndo'); if (b.classList.contains('show')) b.style.top = on ? ($('#vbar').offsetHeight + 12) + 'px' : ''; }
+function showBar(on){ V.barShown = on; $('#vbar').hidden = !on; if (!on) toolPop(false); $('#metroDot').style.top = on ? ($('#vbar').offsetHeight + 14) + 'px' : ''; const b = $('#qUndo'); if (b.classList.contains('show')) b.style.top = on ? ($('#vbar').offsetHeight + 12) + 'px' : ''; }
 function updateBar(){
   if (!V.open) return;
   const n = S.noter[V.queue[V.qi]];
@@ -2022,11 +2044,16 @@ function updateBar(){
   $('#vPage').textContent = `${V.page > 0 ? V.page : '–'} / ${V.numPages || '–'}`;
   document.querySelectorAll('#toolGrp [data-tool]').forEach(b => b.setAttribute('aria-pressed', b.dataset.tool === V.tool));
   const cols = V.tool === 'hl' ? HL_COLORS : COLORS, cur = V.tool === 'hl' ? V.hlColor : V.penColor;
-  $('#colorGrp').hidden = !V.tool || V.tool === 'erase' || V.tool === 'stop';
+  const styled = V.tool === 'pen' || V.tool === 'hl';
+  // Färg och linje ligger alltid på samma plats i menyn – tonas bara ner när verktyget inte använder dem
+  $('#tpStyle').classList.toggle('off', !styled);
   $('#colorGrp').innerHTML = cols.map(([c, name]) => `<button class="sw" data-color="${c}" title="${name}" style="background:${c}" aria-pressed="${c === cur}"></button>`).join('');
   $('#colorGrp').querySelectorAll('[data-color]').forEach(b => b.onclick = () => { if (V.tool === 'hl') V.hlColor = b.dataset.color; else V.penColor = b.dataset.color; updateBar(); });
-  $('#vWidth').textContent = V.width === 'fin' ? 'Fin' : 'Grov';
-  $('#vWidth').hidden = !V.tool || V.tool === 'erase' || V.tool === 'stop';
+  $('#vWidth').querySelectorAll('[data-w]').forEach(b => b.setAttribute('aria-pressed', b.dataset.w === V.width));
+  const T = TOOL_INFO[V.tool];
+  $('#vTools').innerHTML = T ? `<span>${T[0]}</span><span>${T[1]}</span>${styled ? `<span class="dot" style="background:${cur}"></span>` : ''}<span class="car">▾</span>`
+    : `<span>✎</span><span>Verktyg</span><span class="car">▾</span>`;
+  $('#vTools').setAttribute('aria-pressed', !!T);
   $('#vUndo').disabled = !V.undo.length; $('#vRedo').disabled = !V.redo.length;
   $('#vFinger').setAttribute('aria-pressed', V.finger);
 }
@@ -2034,6 +2061,28 @@ $('#vClose').onclick = closeViewer;
 $('#vTitle').onclick = () => { const id = V.queue[V.qi]; if (id) renameNot(id, () => { updateBar(); if (!$('#vlist').hidden) renderVList(); }); };
 $('#vPrev').onclick = () => go(-1);
 $('#vNext').onclick = () => go(1);
+// Ritverktygen fälls ut under knappen "Verktyg" och stängs när man trycker utanför menyn
+const TOOL_INFO = { pen: ['✎', 'Penna'], hl: ['▍', 'Markera'], erase: ['⌫', 'Sudd'], stop: ['⤓', 'Bläddringspunkt'] };
+function toolPop(open){
+  const pop = $('#toolPop'), btn = $('#vTools');
+  if (open == null) open = pop.hidden;
+  pop.hidden = !open; btn.setAttribute('aria-expanded', open);
+  if (open) placeToolPop();
+}
+function placeToolPop(){
+  const pop = $('#toolPop'); if (pop.hidden) return;
+  const r = $('#vTools').getBoundingClientRect(), w = pop.offsetWidth;
+  pop.style.top = (r.bottom + 6) + 'px';
+  pop.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, r.left)) + 'px';
+}
+$('#vTools').onclick = () => toolPop();
+window.addEventListener('resize', placeToolPop);
+document.addEventListener('pointerdown', e => {
+  if ($('#toolPop').hidden) return;
+  if (e.target.closest('#toolPop') || e.target.closest('#vTools')) return;
+  toolPop(false); // trycket fortsätter som vanligt, t.ex. rita direkt på noten
+}, true);
+$('#vWidth').querySelectorAll('[data-w]').forEach(b => b.onclick = () => { V.width = b.dataset.w; updateBar(); });
 document.querySelectorAll('#toolGrp [data-tool]').forEach(b => b.onclick = () => {
   const was = V.tool;
   V.tool = was === b.dataset.tool ? null : b.dataset.tool; // tryck på valt verktyg igen = avmarkera
@@ -2042,7 +2091,6 @@ document.querySelectorAll('#toolGrp [data-tool]').forEach(b => b.onclick = () =>
   if (!V.tool) toast('Inget verktyg valt – pennan bläddrar och scrollar');
   else if (V.tool === 'stop' && was !== 'stop') toast(V.tall ? 'Tryck där nästa vy ska börja · dra en linje för att flytta · ✕ tar bort (penna eller finger)' : 'Punkterna används när iPaden ligger ner');
 });
-$('#vWidth').onclick = () => { V.width = V.width === 'fin' ? 'grov' : 'fin'; updateBar(); };
 $('#vUndo').onclick = undo;
 $('#vRedo').onclick = redo;
 $('#vFinger').onclick = () => { V.finger = !V.finger; updateBar(); toast(V.finger ? 'Fingret ritar – bläddra med pilarna eller pedalen' : 'Fingret bläddrar'); };
