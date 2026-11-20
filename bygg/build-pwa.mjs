@@ -42,7 +42,8 @@ fs.writeFileSync(path.join(OUT, 'sw.js'), `// Notstället – service worker. G�
 const VERSION = '${version}';
 const CACHE = 'notstallet-' + VERSION;
 const FILES = ${JSON.stringify(precache, null, 0)};
-self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES))); });
+// cache: 'reload' – hämta alltid färskt från servern, inte ur webbläsarens minne (GitHub Pages låter filer ligga kvar i 10 min)
+self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES.map(f => new Request(f, { cache: 'reload' }))))); });
 self.addEventListener('activate', e => { e.waitUntil((async () => { for (const k of await caches.keys()) if (k !== CACHE) await caches.delete(k); await self.clients.claim(); })()); });
 self.addEventListener('message', e => { if (e.data === 'skipWaiting') self.skipWaiting(); });
 self.addEventListener('fetch', e => {
