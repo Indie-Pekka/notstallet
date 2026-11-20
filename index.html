@@ -152,6 +152,10 @@ body.alpha-pad .app{padding-right:44px}
   background:rgba(31,28,24,.82);color:#fff;font-size:28px;display:grid;place-items:center;box-shadow:0 4px 14px rgba(0,0,0,.3);
   opacity:0;pointer-events:none;transition:opacity .25s;z-index:5;touch-action:manipulation}
 #qUndo.show{opacity:1;pointer-events:auto}
+#qSwap{position:absolute;left:14px;bottom:calc(env(safe-area-inset-bottom) + 14px);width:56px;height:56px;border-radius:50%;border:0;
+  background:rgba(31,28,24,.72);color:#fff;font-size:24px;display:grid;place-items:center;box-shadow:0 4px 14px rgba(0,0,0,.3);z-index:5;touch-action:manipulation}
+#qSwap.erase{background:var(--acc)}
+#qSwap[hidden]{display:none}
 #vtoast{position:absolute;left:50%;bottom:22px;transform:translateX(-50%);background:rgba(0,0,0,.72);color:#fff;border-radius:999px;padding:7px 16px;font-size:15px;pointer-events:none;opacity:0;transition:opacity .25s}
 #vtoast.show{opacity:1}
 #vlist{position:absolute;z-index:9;width:min(360px,90vw);max-height:70vh;background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.25);overflow:auto;padding:12px}
@@ -250,6 +254,7 @@ body.alpha-pad .app{padding-right:44px}
     <button class="tpi" id="vFinger"><span class="ic">☝︎</span>Fingret ritar också</button>
   </div>
   <button id="qUndo" title="Ångra" aria-label="Ångra">↶</button>
+  <button id="qSwap" title="Växla mellan penna och sudd" aria-label="Växla mellan penna och sudd" hidden></button>
   <div id="metroDot" hidden></div>
   <div id="metro" hidden>
     <div class="mrow">
@@ -293,7 +298,7 @@ import * as pdfjsLib from './pdf.min.mjs';
 
 // 'artifact' = versionen i Claude (molnlagring), 'pwa' = hemskärmsappen (allt sparas på iPaden). Sätts av byggskriptet.
 const APP_MODE = 'pwa';
-const APP_VERSION = '2026.11.20c';
+const APP_VERSION = '2026.11.20d';
 const LOCAL = APP_MODE === 'pwa';
 
 const BASE = document.baseURI;
@@ -2054,6 +2059,11 @@ function updateBar(){
   $('#vTools').innerHTML = T ? `<span>${T[0]}</span><span>${T[1]}</span>${styled ? `<span class="dot" style="background:${cur}"></span>` : ''}<span class="car">▾</span>`
     : `<span>✎</span><span>Verktyg</span><span class="car">▾</span>`;
   $('#vTools').setAttribute('aria-pressed', !!T);
+  // Växlingsknappen i nedre vänstra hörnet: syns när man ritar eller suddar
+  const sw = $('#qSwap');
+  sw.hidden = !['pen', 'hl', 'erase'].includes(V.tool);
+  sw.classList.toggle('erase', V.tool === 'erase');
+  sw.textContent = V.tool === 'erase' ? '⌫' : V.tool === 'hl' ? '▍' : '✎';
   $('#vUndo').disabled = !V.undo.length; $('#vRedo').disabled = !V.redo.length;
   $('#vFinger').setAttribute('aria-pressed', V.finger);
 }
@@ -2352,6 +2362,15 @@ function flashUndo(){
 }
 function hideUndo(){ clearTimeout(qUndoT); $('#qUndo').classList.remove('show'); }
 $('#qUndo').addEventListener('pointerdown', e => e.stopPropagation());
+// Penna ⇄ sudd med ett tryck (Apple Pencils dubbeltryck når inte webbappar)
+$('#qSwap').addEventListener('pointerdown', e => e.stopPropagation());
+$('#qSwap').addEventListener('click', e => {
+  e.stopPropagation();
+  if (V.tool === 'erase') V.tool = V.lastDraw || 'pen';
+  else { V.lastDraw = V.tool === 'hl' ? 'hl' : 'pen'; V.tool = 'erase'; }
+  updateBar();
+  toast(V.tool === 'erase' ? 'Sudd' : V.tool === 'hl' ? 'Markera' : 'Penna');
+});
 $('#qUndo').addEventListener('click', e => { e.stopPropagation(); undo(); });
 function applyAction(a, inverse){
   const e = S.ann.get(a.k) || (() => { const n = { not: a.k.split('_p')[0], sida: +a.k.split('_p')[1], streck: [], stopp: [], uppdaterad: 0 }; S.ann.set(a.k, n); return n; })();
