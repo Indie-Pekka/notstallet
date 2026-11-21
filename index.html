@@ -307,8 +307,11 @@ import * as pdfjsLib from './pdf.min.mjs';
 
 // 'artifact' = versionen i Claude (molnlagring), 'pwa' = hemskärmsappen (allt sparas på iPaden). Sätts av byggskriptet.
 const APP_MODE = 'pwa';
-const APP_VERSION = '2026.11.20h';
+const APP_VERSION = '2026.11.21a';
 const LOCAL = APP_MODE === 'pwa';
+// 'wix' = medlemsläget på popkörernas hemsida: noter, låtlistor och anteckningar kommer från hemsidan via
+// sidan som bäddar in appen (postMessage). Medlemmen läser och antecknar men laddar inte upp och tar inte bort något.
+const MEMBER = APP_MODE === 'wix';
 
 const BASE = document.baseURI;
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('./pdf.worker.min.mjs', BASE).href;
@@ -339,7 +342,7 @@ const IDB = (() => {
     if (dbp) return dbp;
     dbp = new Promise((res, rej) => {
       let r;
-      try { r = indexedDB.open('notstallet', 1); } catch (e) { rej(e); return; }
+      try { r = indexedDB.open(MEMBER ? 'notstallet-medlem' : 'notstallet', 1); } catch (e) { rej(e); return; }
       r.onupgradeneeded = () => { const d = r.result; for (const s of ['pdf','kv','ann','pending']) if (!d.objectStoreNames.contains(s)) d.createObjectStore(s); };
       r.onsuccess = () => res(r.result);
       r.onerror = () => rej(r.error);
@@ -405,7 +408,8 @@ async function flush(){
         const code = e && e.code;
         if (code === 'invalid_argument' || code === 'quota_exceeded') {
           if (S.pending.get(path) === item) { S.pending.delete(path); IDB.del('pending', path); }
-          S.lastError = code === 'quota_exceeded' ? 'Molnlagringen är full – en ändring kunde inte sparas där.' : 'En ändring kunde inte sparas i molnet (för stor?).';
+          S.lastError = MEMBER ? (e.message || 'En ändring kunde inte sparas på hemsidan.')
+            : code === 'quota_exceeded' ? 'Molnlagringen är full – en ändring kunde inte sparas där.' : 'En ändring kunde inte sparas i molnet (för stor?).';
         } else { failed = true; break; }
       }
     }
@@ -491,7 +495,146 @@ function cleanStrokes(arr){
   return out;
 }
 
+/* ---------- Medlemsläget: allt går via sidan på hemsidan som bäddar in appen ---------- */
+// Sidan (portalens app på hemsidan) svarar på:
+//   klar          → data { medlem, kor, noter[], listor[], mappar[], anteckningar{}, start }
+//   pdf { not }   → svar med pdf-filen (ArrayBuffer). Sidan hämtar den själv från hemsidan, så inga CORS-regler behövs.
+//   spara { andring } → svar ok / fel. andring = { typ:'sida', not, sida, streck, stopp, uppdaterad } | { typ:'not', not, zoom, tempo }
+//   stang         → sidan stänger helskärmsrutan
+// Meddelanden godtas bara från fönstret som bäddar in appen, och bara från hemsidans domäner.
+const SITE_ORIGIN = /^https:\/\/(?:[a-z0-9-]+\.)*(?:enstoringproduktion\.se|wixsite\.com|wixstudio\.io|wixstudio\.com)$/;
+const W = { origin: null, seq: 0, wait: new Map(), medlem: null, kor: '', pdf: {}, sent: {}, got: false, ready: null, readyRes: null, timer: null };
+W.ready = new Promise(r => { W.readyRes = r; });
+function wPost(msg, transfer){
+  if (!MEMBER || window.parent === window) return;
+  try { window.parent.postMessage({ ns: 'notstallet', ...msg }, W.origin || '*', transfer || []); } catch {}
+}
+function wAsk(typ, data, ms = 30000){
+  return W.ready.then(() => new Promise((res, rej) => {
+    const id = ++W.seq;
+    const t = setTimeout(() => { W.wait.delete(id); rej({ code: 'timeout', message: 'Hemsidan svarade inte.' }); }, ms);
+    W.wait.set(id, { res, rej, t });
+    wPost({ typ, id, ...data });
+  }));
+}
+window.addEventListener('message', e => {
+  if (!MEMBER || e.source !== window.parent || !SITE_ORIGIN.test(e.origin)) return;
+  const m = e.data; if (!m || m.ns !== 'notstallet') return;
+  W.origin = e.origin; W.readyRes();
+  if (m.typ === 'data') { wData(m.data || {}); return; }
+  if (m.typ === 'data-fel') { clearTimeout(W.timer); S.dbStatus = 'fel'; S.lastError = String(m.fel || 'Hemsidan kunde inte skicka noterna.'); renderStatus(); return; }
+  if (m.typ === 'svar') {
+    const w = W.wait.get(m.id); if (!w) return;
+    W.wait.delete(m.id); clearTimeout(w.t);
+    if (m.ok) w.res(m.data); else w.rej({ code: m.kod || 'fel', message: String(m.fel || 'Något gick fel.') });
+  }
+});
+// Skrivningar i medlemsläget: bara egna anteckningar, bläddringspunkter, zoom och tempo. Allt annat ändras inte här.
+function memberDb(){
+  const save = async (path, data) => {
+    const i = path.indexOf('/'), coll = path.slice(0, i), key = path.slice(i + 1);
+    if (coll === 'anteckningar') {
+      const [not, sida] = [key.split('_p')[0], +key.split('_p')[1]];
+      const a = data || {};
+      return wAsk('spara', { andring: { typ: 'sida', not, sida, streck: data ? a.streck || [] : [], stopp: data ? a.stopp || [] : [], uppdaterad: +a.uppdaterad || Date.now() } });
+    }
+    if (coll === 'noter' && data) {
+      const set = { zoom: data.zoom || null, tempo: data.tempo && data.tempoSrc !== 'not' ? data.tempo : null };
+      const sig = JSON.stringify(set);
+      if (W.sent[key] === sig) return; // inget som sparas på hemsidan har ändrats (t.ex. bara sidantalet)
+      await wAsk('spara', { andring: { typ: 'not', not: key, ...set } });
+      W.sent[key] = sig;
+    }
+  };
+  return { doc: path => ({ set: data => save(path, data), delete: () => save(path, null) }) };
+}
+async function wipeMemberCache(){
+  for (const st of ['pdf', 'ann', 'pending']) for (const k of await IDB.keys(st)) await IDB.del(st, k);
+  S.ann.clear(); S.annLoaded.clear(); S.pending.clear(); S.cached.clear();
+  for (const id of [...docCache.keys()]) forgetDoc(id);
+}
+async function wData(d){
+  clearTimeout(W.timer);
+  const me = String(d.medlem && d.medlem.id || '');
+  // Någon annan har loggat in på samma enhet: ingenting från förra medlemmen får synas
+  if (me && S.settings.medlemId && S.settings.medlemId !== me) await wipeMemberCache();
+  S.settings.medlemId = me; IDB.put('kv', 'settings', S.settings);
+  W.medlem = d.medlem || null; W.kor = String(d.kor || '');
+  const filer = (await IDB.get('kv', 'pdfFil')) || {};
+  const noter = {}, nyFil = {};
+  for (const x of Array.isArray(d.noter) ? d.noter : []) {
+    if (!x || typeof x.id !== 'string') continue;
+    const n = cleanNot(x.id, { titel: x.titel, korer: x.korer, filnamn: x.filnamn, sidor: x.sidor, zoom: x.zoom, tempo: x.tempo, uppdaterad: x.uppdaterad, skapad: x.uppdaterad });
+    const old = S.noter[x.id];
+    if (old && old.tempoSrc === 'not' && !n.tempo) { n.tempo = old.tempo; n.tempoSrc = 'not'; } // tempo som lästs av från noten på enheten
+    if (old && old.sidor && !n.sidor) n.sidor = old.sidor;
+    if (old && old.tempoKoll) n.tempoKoll = old.tempoKoll;
+    noter[x.id] = n;
+    W.pdf[x.id] = { fil: String(x.fil || '') };
+    nyFil[x.id] = String(x.fil || '');
+    W.sent[x.id] = JSON.stringify({ zoom: n.zoom || null, tempo: x.tempo ? n.tempo || null : null });
+    // Ny pdf för låten på hemsidan: glöm den gamla filen och anteckningarna som hörde till den
+    if (filer[x.id] && filer[x.id] !== nyFil[x.id]) {
+      forgetDoc(x.id); IDB.del('pdf', x.id); S.cached.delete(x.id);
+      for (const k of await IDB.keys('ann', IDBKeyRange.bound(x.id + '_p', x.id + '_p￿'))) { IDB.del('ann', k); S.ann.delete(k); }
+    }
+  }
+  for (const id of Object.keys(filer)) if (!noter[id]) { IDB.del('pdf', id); S.cached.delete(id); } // noter som inte längre visas för medlemmen
+  IDB.put('kv', 'pdfFil', nyFil);
+  S.noter = noter;
+  S.listor = {}; for (const l of Array.isArray(d.listor) ? d.listor : []) if (l && typeof l.id === 'string') S.listor[l.id] = cleanList(l.id, l);
+  S.mappar = {}; for (const m of Array.isArray(d.mappar) ? d.mappar : []) if (m && typeof m.id === 'string') S.mappar[m.id] = cleanMapp(m.id, m);
+  IDB.put('kv', 'noter', S.noter); IDB.put('kv', 'listor', S.listor); IDB.put('kv', 'mappar', S.mappar);
+  // Anteckningarna: hemsidans version gäller, utom på sidor med ändringar som inte hunnit sparas
+  const server = d.anteckningar && typeof d.anteckningar === 'object' ? d.anteckningar : {};
+  const busy = k => S.pending.has('anteckningar/' + k) || annSaveT.has(k);
+  for (const k of await IDB.keys('ann')) if (!server[k] && !busy(k)) { IDB.del('ann', k); S.ann.delete(k); }
+  for (const [k, a] of Object.entries(server)) {
+    const nid = k.split('_p')[0]; if (!noter[nid] || busy(k)) continue;
+    const e = { not: nid, sida: +a.sida || +k.split('_p')[1] || 1, streck: cleanStrokes(a.streck), stopp: cleanStops(a.stopp), uppdaterad: +a.uppdaterad || 0 };
+    S.ann.set(k, e); IDB.put('ann', k, e);
+  }
+  for (const id of Object.keys(noter)) S.annLoaded.add(id);
+  const first = !W.got; W.got = true;
+  if (first && W.kor && allKorer().length > 1 && allKorer().includes(W.kor)) S.korFilter = W.kor;
+  S.dbStatus = 'online'; S.lastError = '';
+  render();
+  if (V.open) { if (!V.queue.every(id => S.noter[id])) closeViewer(); else { updateBar(); drawInk(); } }
+  if (first && d.start && S.noter[d.start] && !V.open) openViewer([d.start], 0, 1, null);
+  flushSoon(300);
+}
+function connectMember(){
+  S.db = memberDb();
+  S.dbStatus = 'laddar'; renderStatus();
+  const hello = () => wPost({ typ: 'klar', version: APP_VERSION });
+  hello();
+  // Inget svar: visa det som finns sparat på enheten och fråga igen en gång
+  W.timer = setTimeout(() => { if (!W.got) { S.dbStatus = 'offline'; renderStatus(); hello(); W.timer = setTimeout(() => { if (!W.got) { S.dbStatus = 'offline'; renderStatus(); } }, 20000); } }, 15000);
+}
+// Spara det som väntar innan rutan stängs eller sidan göms
+function commitAnnNow(){ for (const k of [...annSaveT.keys()]) { clearTimeout(annSaveT.get(k)); annCommit(k); } }
+async function closeMember(){
+  commitAnnNow(); flushSoon(0);
+  const waiting = () => S.pending.size > 0;
+  if (waiting()) {
+    openModal(`<h2>Sparar dina anteckningar…</h2><p id="cmTxt">Ett ögonblick.</p>`);
+    for (let i = 0; i < 40 && waiting(); i++) await sleep(250);
+    if (waiting()) {
+      openModal(`<h2>Allt är inte sparat än</h2><p>${S.pending.size === 1 ? 'En ändring' : S.pending.size + ' ändringar'} har inte kommit fram till hemsidan. De ligger kvar på den här enheten och skickas nästa gång du öppnar Notstället.</p>
+        <div class="actions"><button class="btn" id="cmWait">Vänta</button><button class="btn primary" id="cmClose">Stäng ändå</button></div>`);
+      $('#cmWait').onclick = () => { closeModal(); flushSoon(0); };
+      $('#cmClose').onclick = () => { closeModal(); wPost({ typ: 'stang' }); };
+      return;
+    }
+    closeModal();
+  }
+  if (V.open) closeViewer();
+  wPost({ typ: 'stang' });
+}
+if (MEMBER) document.addEventListener('visibilitychange', () => { if (document.hidden) { commitAnnNow(); flushSoon(0); } });
+
 async function connect(){
+  if (MEMBER) { connectMember(); return; }
   if (LOCAL) { S.dbStatus = 'lokal'; renderStatus(); return; }
   for (let i = 0; i < 50 && !(window.claude && window.claude.use); i++) await sleep(100);
   if (!(window.claude && window.claude.use)) { S.dbStatus = 'lokal'; renderStatus(); return; }
@@ -528,6 +671,15 @@ async function getPdfBytes(id){
   let buf = await IDB.get('pdf', id);
   if (buf) { S.cached.add(id); return buf; }
   const n = S.noter[id];
+  if (MEMBER) {
+    // Sidan på hemsidan hämtar pdf:en (samma domän som filen) och skickar den hit
+    if (!n || !W.pdf[id]) throw new Error('Noten finns inte på hemsidan längre.');
+    try { buf = await wAsk('pdf', { not: id }, 90000); }
+    catch (e) { throw new Error(e && e.code === 'timeout' ? 'Kunde inte hämta noten – ingen internetanslutning?' : (e && e.message) || 'Kunde inte hämta noten.'); }
+    if (!(buf instanceof ArrayBuffer) || !buf.byteLength) throw new Error('Kunde inte hämta noten.');
+    if (await IDB.put('pdf', id, buf)) S.cached.add(id);
+    return buf;
+  }
   if (!n || !n.asset) throw new Error('Filen finns inte på den här enheten och har inte laddats upp till molnet än.');
   let r;
   try { r = await withTimeout(fetch('/_blob/' + n.asset), 60000); } catch { throw new Error('Kunde inte hämta noten – ingen internetanslutning?'); }
@@ -603,6 +755,7 @@ function render(){ renderStatus(); renderChips(); renderNoter(); renderListor();
 function renderStatus(){
   const el = $('#status'); if (!el) return;
   if (LOCAL) { renderLocalStatus(el); return; }
+  if (MEMBER) { renderMemberStatus(el); return; }
   const pend = S.pending.size + S.uploadQueue.length;
   let cls = 'ok', txt = '';
   if (S.dbStatus === 'laddar') { cls = ''; txt = 'Ansluter…'; }
@@ -636,6 +789,21 @@ function renderLocalStatus(el){
   $('#bkImport').onclick = () => $('#bkFile').click();
 }
 
+// Medlemsläget: vem som är inloggad och om anteckningarna har sparats på hemsidan
+function renderMemberStatus(el){
+  const pend = S.pending.size;
+  let cls = 'ok', txt;
+  if (S.dbStatus === 'laddar') { cls = ''; txt = 'Hämtar noterna från hemsidan…'; }
+  else if (S.dbStatus === 'offline') { cls = 'warn'; txt = 'Hemsidan svarar inte – du ser det som finns sparat på enheten.'; }
+  else if (S.dbStatus === 'fel') { cls = 'err'; txt = 'Noterna kunde inte hämtas från hemsidan.'; }
+  else txt = pend ? '' : 'Dina anteckningar sparas på hemsidan och syns bara för dig';
+  if (pend) { cls = cls === 'err' ? 'err' : 'warn'; txt = (txt ? txt + ' ' : '') + `${pend} ${pend === 1 ? 'ändring väntar' : 'ändringar väntar'} på att sparas.`; }
+  const who = W.medlem && W.medlem.namn ? `Inloggad som ${W.medlem.namn}` : '';
+  el.innerHTML = `<span class="${cls}"><span class="dot"></span>${esc(txt)}</span>` + (who ? `<span>${esc(who)}</span>` : '') +
+    (S.lastError ? `<span class="err"><span class="dot"></span>${esc(S.lastError)}</span>` : '') +
+    `<span style="color:#b0a99c">v${esc(APP_VERSION)}</span>`;
+}
+
 function inAnyList(id){ for (const l of Object.values(S.listor)) if (l.verk.includes(id)) return true; return false; }
 function renderChips(){
   const list = allKorer();
@@ -643,9 +811,10 @@ function renderChips(){
   const free = Object.keys(S.noter).filter(id => !inAnyList(id)).length;
   $('#chips').innerHTML = (list.length ? [['', 'Alla körer'], ...list.map(k => [k, k])].map(([v, t]) =>
     `<button class="chip" data-kor="${esc(v)}" aria-pressed="${S.korFilter === v}">${esc(t)}</button>`).join('') : '') +
-    (list.length ? `<span style="width:1px;background:var(--line);margin:0 4px"></span>` : '') + `<button class="chip" id="freeChip" aria-pressed="${!!S.notInList}">${S.notInList ? '✓ ' : ''}Inte i någon låtlista (${free})</button>`;
+    (MEMBER ? '' : (list.length ? `<span style="width:1px;background:var(--line);margin:0 4px"></span>` : '') + `<button class="chip" id="freeChip" aria-pressed="${!!S.notInList}">${S.notInList ? '✓ ' : ''}Inte i någon låtlista (${free})</button>`);
+  if (MEMBER && list.length < 2) $('#chips').innerHTML = ''; // en kör: inget att välja mellan
   $('#chips').querySelectorAll('[data-kor]').forEach(b => b.onclick = () => { S.korFilter = b.dataset.kor; renderChips(); renderNoter(); });
-  $('#freeChip').onclick = () => { S.notInList = !S.notInList; renderChips(); renderNoter(); };
+  if ($('#freeChip')) $('#freeChip').onclick = () => { S.notInList = !S.notInList; renderChips(); renderNoter(); };
 }
 
 function sortedNoter(filter = S.search, kor = S.korFilter, onlyFree = false){
@@ -657,6 +826,7 @@ function sortedNoter(filter = S.search, kor = S.korFilter, onlyFree = false){
 function notSub(n){
   const parts = [korerOf(n).join(', ') || 'Ingen kör', n.sidor ? n.sidor + ' s.' : '', n.medNot ? 'med noteringar' : ''].filter(Boolean).join(' · ');
   if (LOCAL) return esc(parts);
+  if (MEMBER) return esc(parts) + (hasAnn(n.id) ? '<span class="badge ann">dina anteckningar</span>' : '') + (S.cached.has(n.id) ? '<span class="badge ok">på enheten</span>' : '');
   let badge = '';
   if (!S.cached.has(n.id)) badge = n.asset ? '<span class="badge">i molnet</span>' : '<span class="badge warn">på annan enhet</span>';
   else if (!n.asset) badge = S.uploadQueue.includes(n.id) ? '<span class="badge warn">väntar på uppladdning</span>' : '<span class="badge warn">bara här</span>';
@@ -668,7 +838,8 @@ function renderNoterInner(){
   const el = $('#noterList');
   const all = Object.keys(S.noter).length;
   const items = sortedNoter(S.search, S.korFilter, S.notInList);
-  if (!all) { el.innerHTML = `<div class="empty">Inga noter än.<br>Tryck på <b>Lägg till noter</b> och välj pdf:er, till exempel noter som du exporterat från forScore till Filer.</div>`; return; }
+  if (!all) { el.innerHTML = MEMBER ? `<div class="empty">${S.dbStatus === 'laddar' ? 'Hämtar noterna…' : 'Det finns inga noter för din kör på hemsidan än.'}</div>`
+    : `<div class="empty">Inga noter än.<br>Tryck på <b>Lägg till noter</b> och välj pdf:er, till exempel noter som du exporterat från forScore till Filer.</div>`; return; }
   if (!items.length) { el.innerHTML = `<div class="empty">${S.notInList && !S.search && !S.korFilter ? 'Alla noter ligger i minst en låtlista.' : 'Inga noter matchar sökningen eller filtret.'}</div>`; return; }
   if (S.selMode) {
     el.innerHTML = items.map(n => { const on = S.sel.includes(n.id); return `<div class="row${on ? ' sel' : ''}" data-l="${firstLetter(n.titel)}"><span class="check${on ? ' on' : ''}">${on ? '✓' : ''}</span>` +
@@ -678,7 +849,7 @@ function renderNoterInner(){
     return;
   }
   el.innerHTML = items.map(n => `<div class="row" data-l="${firstLetter(n.titel)}"><button class="main" data-open="${esc(n.id)}"><div class="t">${esc(n.titel)}</div><div class="s">${notSub(n)}</div></button>` +
-    `<button class="btn small" data-tolist="${esc(n.id)}">＋ Låtlista</button><button class="btn small" data-edit="${esc(n.id)}">Ändra</button></div>`).join('');
+    (MEMBER ? '' : `<button class="btn small" data-tolist="${esc(n.id)}">＋ Låtlista</button><button class="btn small" data-edit="${esc(n.id)}">Ändra</button>`) + `</div>`).join('');
   el.querySelectorAll('[data-open]').forEach(b => b.onclick = () => openViewer([b.dataset.open], 0, 1, null));
   el.querySelectorAll('[data-tolist]').forEach(b => b.onclick = () => addToListDialog(b.dataset.tolist));
   el.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => editNot(b.dataset.edit));
@@ -965,7 +1136,7 @@ const folderOf = l => (l.mapp && S.mappar[l.mapp]) ? l.mapp : '';
 function listRow(l){
   return `<div class="row"><button class="main" data-list="${esc(l.id)}"><div class="t">${esc(l.namn)}</div>` +
     `<div class="s">${esc([l.datum, l.verk.length + (l.verk.length === 1 ? ' låt' : ' låtar')].filter(Boolean).join(' · '))}</div></button>` +
-    `<button class="btn small" data-play="${esc(l.id)}">▶ Spela</button><button class="btn small" data-lmenu="${esc(l.id)}" title="Flytta eller ta bort">⋯</button></div>`;
+    `<button class="btn small" data-play="${esc(l.id)}">▶ Spela</button>` + (MEMBER ? '<span style="width:6px"></span>' : `<button class="btn small" data-lmenu="${esc(l.id)}" title="Flytta eller ta bort">⋯</button>`) + `</div>`;
 }
 function deleteList(id){
   delete S.listor[id]; IDB.put('kv', 'listor', S.listor); queueWrite('listor/' + id, null);
@@ -1006,15 +1177,18 @@ function renderListor(){
   let html = '';
   if (f) {
     $('#folderHead').innerHTML = `<div class="detailhead"><button class="btn" id="fBack">‹ Alla låtlistor</button><h2 style="margin:0 6px;flex:1;font-size:21px">📁 ${esc(f.namn)}</h2>
-      <button class="btn small" id="fRename">Byt namn</button><button class="btn small danger" id="fDelete">Ta bort mappen</button></div>`;
+      ${MEMBER ? '' : `<button class="btn small" id="fRename">Byt namn</button><button class="btn small danger" id="fDelete">Ta bort mappen</button>`}</div>`;
     const ls = sortLists(all.filter(l => folderOf(l) === f.id));
-    html = ls.length ? ls.map(listRow).join('') : `<div class="empty">Mappen är tom. Skapa en låtlista här, eller flytta en befintlig hit under listans <b>Mapp</b>.</div>`;
+    if (MEMBER && f.id === 'kommande') ls.reverse(); // närmaste konserten först
+    html = ls.length ? ls.map(listRow).join('') : MEMBER ? `<div class="empty">Mappen är tom.</div>` : `<div class="empty">Mappen är tom. Skapa en låtlista här, eller flytta en befintlig hit under listans <b>Mapp</b>.</div>`;
     $('#fBack').onclick = () => { S.openFolder = null; renderListor(); };
-    $('#fRename').onclick = () => folderDialog(f.id);
-    $('#fDelete').onclick = () => confirmBox('Ta bort mappen?', `Mappen ”${esc(f.namn)}” tas bort. Låtlistorna i den finns kvar och hamnar bland alla låtlistor.`, 'Ta bort', () => {
-      for (const l of Object.values(S.listor)) if (l.mapp === f.id) { l.mapp = ''; writeList(l.id); }
-      delete S.mappar[f.id]; IDB.put('kv', 'mappar', S.mappar); queueWrite('mappar/' + f.id, null); S.openFolder = null; renderListor();
-    });
+    if (!MEMBER) {
+      $('#fRename').onclick = () => folderDialog(f.id);
+      $('#fDelete').onclick = () => confirmBox('Ta bort mappen?', `Mappen ”${esc(f.namn)}” tas bort. Låtlistorna i den finns kvar och hamnar bland alla låtlistor.`, 'Ta bort', () => {
+        for (const l of Object.values(S.listor)) if (l.mapp === f.id) { l.mapp = ''; writeList(l.id); }
+        delete S.mappar[f.id]; IDB.put('kv', 'mappar', S.mappar); queueWrite('mappar/' + f.id, null); S.openFolder = null; renderListor();
+      });
+    }
     $('#newFolderBtn').hidden = true; $('#korFoldersBtn').hidden = true;
   } else {
     $('#folderHead').innerHTML = '';
@@ -1023,9 +1197,11 @@ function renderListor(){
       return `<div class="row"><button class="main" data-folder="${esc(m.id)}"><div class="t">📁 ${esc(m.namn)}</div><div class="s">${n} ${n === 1 ? 'låtlista' : 'låtlistor'}</div></button><span style="padding-right:14px;color:var(--muted)">›</span></div>`; }).join('');
     const loose = sortLists(all.filter(l => !folderOf(l)));
     html += loose.map(listRow).join('');
-    if (!folders.length && !loose.length) html = `<div class="empty">Inga låtlistor än. Skapa en med <b>Ny låtlista</b>, eller börja med mappar.</div>`;
-    $('#newFolderBtn').hidden = false; $('#korFoldersBtn').hidden = folders.length > 0;
+    if (!folders.length && !loose.length) html = MEMBER ? `<div class="empty">Det finns inga konserter med låtordning för din kör än. Låtordningen läggs in på konsertens sida i kalendern.</div>`
+      : `<div class="empty">Inga låtlistor än. Skapa en med <b>Ny låtlista</b>, eller börja med mappar.</div>`;
+    $('#newFolderBtn').hidden = MEMBER; $('#korFoldersBtn').hidden = MEMBER || folders.length > 0;
   }
+  $('#newListBtn').hidden = MEMBER;
   idx.innerHTML = html;
   idx.querySelectorAll('[data-folder]').forEach(b => b.onclick = () => { S.openFolder = b.dataset.folder; renderListor(); window.scrollTo(0, 0); });
   idx.querySelectorAll('[data-list]').forEach(b => b.onclick = () => { S.openList = b.dataset.list; renderListor(); });
@@ -1062,7 +1238,26 @@ function folderOptions(sel){
     .map(m => `<option value="${esc(m.id)}" ${m.id === sel ? 'selected' : ''}>${esc(m.namn)}</option>`).join('');
 }
 
+// Medlemsläget: låtlistan är konsertens låtordning från hemsidan – bara att läsa och spela
+function renderMemberListDetail(){
+  const l = S.listor[S.openList]; const el = $('#listDetail');
+  const items = l.verk.map((id, i) => ({ id, i, n: S.noter[id] })).filter(x => x.n);
+  el.innerHTML = `
+    <div class="detailhead">
+      <button class="btn" id="ldBack">‹ ${S.openFolder && S.mappar[S.openFolder] ? esc(S.mappar[S.openFolder].namn) : 'Alla låtlistor'}</button>
+      <span style="flex:1"></span>
+      <button class="btn primary" id="ldPlay" ${items.length ? '' : 'disabled'}>▶ Spela</button>
+    </div>
+    <h2 style="margin:4px 0 2px">${esc(l.namn)}</h2>
+    <p style="color:var(--muted);margin:0 0 12px;font-size:15px">${esc([l.datum, items.length + (items.length === 1 ? ' låt med noter' : ' låtar med noter')].filter(Boolean).join(' · '))}</p>
+    <div class="list" id="ldItems">${items.length ? items.map((x, k) => `<div class="row"><span class="num">${k + 1}.</span><button class="main" data-i="${x.i}"><div class="t">${esc(x.n.titel)}</div><div class="s">${notSub(x.n)}</div></button></div>`).join('')
+      : `<div class="empty">Ingen av låtarna i låtordningen har noter på hemsidan än.</div>`}</div>`;
+  $('#ldBack').onclick = () => { S.openList = null; renderListor(); };
+  $('#ldPlay').onclick = () => playList(l.id);
+  el.querySelectorAll('[data-i]').forEach(b => b.onclick = () => playList(l.id, +b.dataset.i));
+}
 function renderListDetail(){
+  if (MEMBER) { renderMemberListDetail(); return; }
   const l = S.listor[S.openList]; const el = $('#listDetail');
   const active = document.activeElement && el.contains(document.activeElement) ? document.activeElement.id : null;
   if (active === 'ldName' || active === 'ldDate') { renderListItems(); return; }
@@ -1097,7 +1292,7 @@ function renderListDetail(){
   renderListItems();
 }
 function renderListItems(){
-  if (S.dragging) return;
+  if (S.dragging || MEMBER) return;
   const l = S.listor[S.openList]; const el = $('#ldItems'); if (!el || !l) return;
   if (!l.verk.length) { el.innerHTML = `<div class="empty">Listan är tom. Lägg till noter från biblioteket.</div>`; return; }
   el.innerHTML = l.verk.map((id, i) => {
@@ -2095,7 +2290,7 @@ function updateBar(){
   $('#vFinger').setAttribute('aria-pressed', V.finger);
 }
 $('#vClose').onclick = closeViewer;
-$('#vTitle').onclick = () => { const id = V.queue[V.qi]; if (id) renameNot(id, () => { updateBar(); if (!$('#vlist').hidden) renderVList(); }); };
+$('#vTitle').onclick = () => { if (MEMBER) { showBar(false); return; } const id = V.queue[V.qi]; if (id) renameNot(id, () => { updateBar(); if (!$('#vlist').hidden) renderVList(); }); };
 $('#vPrev').onclick = () => go(-1);
 $('#vNext').onclick = () => go(1);
 // Ritverktygen fälls ut under knappen "Verktyg" och stängs när man trycker utanför menyn
@@ -2136,11 +2331,11 @@ function renderVList(){
   const l = V.listId && S.listor[V.listId];
   el.innerHTML = `<h3>${esc(l ? l.namn : 'Låtlista')}</h3>` + V.queue.map((id, i) =>
     `<button class="item" data-q="${i}" aria-current="${i === V.qi}">${i + 1}. ${esc(S.noter[id]?.titel || '')}</button>`).join('') +
-    (l ? `<div style="display:flex;flex-direction:column;gap:8px;padding:14px 4px 4px">
+    (l && !MEMBER ? `<div style="display:flex;flex-direction:column;gap:8px;padding:14px 4px 4px">
       <button class="btn primary" id="vlAdd">＋ Lägg till låtar</button>
       <button class="btn" id="vlUpload">⇪ Ladda upp ny not</button></div>` : '');
   el.querySelectorAll('[data-q]').forEach(b => b.onclick = () => jumpTo(+b.dataset.q));
-  if (l) {
+  if (l && !MEMBER) {
     $('#vlAdd').onclick = () => pickForList(l.id);
     $('#vlUpload').onclick = () => { S.uploadTarget = l.id; $('#fileIn').click(); };
   }
@@ -2229,6 +2424,7 @@ async function loadAnn(id){
   let changed = false;
   ks.forEach((k, i) => { if (!S.ann.has(k) && vs[i]) { S.ann.set(k, vs[i]); changed = true; } });
   if (changed && V.open && V.queue[V.qi] === id) drawInk();
+  if (MEMBER) return; // medlemsläget: anteckningarna kom med datan från hemsidan
   if (!S.db) { S.annLoaded.delete(id); return; }
   try {
     const snap = await withTimeout(S.db.collection('anteckningar').where('not', '==', id).get(), 12000);
@@ -2252,12 +2448,14 @@ function saveAnn(k){
   e.uppdaterad = Date.now();
   IDB.put('ann', k, e);
   clearTimeout(annSaveT.get(k));
-  annSaveT.set(k, setTimeout(() => {
-    annSaveT.delete(k);
-    const body = { not: e.not, sida: e.sida, streck: e.streck, stopp: e.stopp || [], uppdaterad: e.uppdaterad };
-    if (JSON.stringify(body).length > 250000) { toast('Sidan har för många anteckningar för molnet – de sparas bara här'); return; }
-    queueWrite('anteckningar/' + k, body);
-  }, 1200));
+  annSaveT.set(k, setTimeout(() => annCommit(k), 1200));
+}
+function annCommit(k){
+  annSaveT.delete(k);
+  const e = S.ann.get(k); if (!e) return;
+  const body = { not: e.not, sida: e.sida, streck: e.streck, stopp: e.stopp || [], uppdaterad: e.uppdaterad };
+  if (JSON.stringify(body).length > 250000) { toast(MEMBER ? 'Sidan har för många anteckningar – de sparas bara på den här enheten' : 'Sidan har för många anteckningar för molnet – de sparas bara här'); return; }
+  queueWrite('anteckningar/' + k, body);
 }
 function pageEntry(create){
   const k = annKey();
@@ -2603,8 +2801,21 @@ stage.addEventListener('touchstart', e => { e.preventDefault(); }, { passive: fa
 ['gesturestart', 'gesturechange', 'gestureend'].forEach(t => document.addEventListener(t, e => { if (V.open) e.preventDefault(); }, { passive: false }));
 stage.addEventListener('contextmenu', e => e.preventDefault());
 
+/* ---------- Medlemsläget: bara det medlemmen ska kunna ---------- */
+function setupMemberUi(){
+  for (const s of ['#addBtn', '#tabVer', '#selBtn', '#fsBtn', '#newListBtn', '#newFolderBtn', '#korFoldersBtn']) $(s).hidden = true;
+  const back = document.createElement('button');
+  back.className = 'btn'; back.id = 'backBtn'; back.textContent = '‹ Tillbaka'; back.title = 'Tillbaka till låtsidan';
+  back.onclick = closeMember;
+  $('header.top').insertBefore(back, $('header.top h1'));
+  $('#search').placeholder = 'Sök titel eller kör';
+  $('#vTitle').removeAttribute('title');
+  document.title = 'Notstället';
+}
+
 /* ---------- Start ---------- */
 (async function start(){
+  if (MEMBER) setupMemberUi();
   const [n, l, settings, uq, pk, pv, pdfKeys, mp] = await Promise.all([
     IDB.get('kv', 'noter'), IDB.get('kv', 'listor'), IDB.get('kv', 'settings'), IDB.get('kv', 'uploadQueue'),
     IDB.keys('pending'), IDB.all('pending'), IDB.keys('pdf'), IDB.get('kv', 'mappar'),
@@ -2612,6 +2823,15 @@ stage.addEventListener('contextmenu', e => e.preventDefault());
   S.noter = n || {}; S.listor = l || {}; S.mappar = mp || {};
   if (settings) Object.assign(S.settings, settings);
   if (S.settings.metro) Object.assign(M, S.settings.metro);
+  // Medlemsläget: sidan skickar med vem som är inloggad (#m=…). Sparat från någon annan på enheten visas aldrig.
+  const who = MEMBER ? new URLSearchParams(location.hash.slice(1)).get('m') || '' : '';
+  if (MEMBER && (!who || !S.settings.medlemId || S.settings.medlemId !== who)) {
+    if (S.settings.medlemId && S.settings.medlemId !== who) await wipeMemberCache();
+    S.noter = {}; S.listor = {}; S.mappar = {};
+    for (const k of ['noter', 'listor', 'mappar', 'pdfFil']) await IDB.del('kv', k);
+    pk.length = 0; pv.length = 0; pdfKeys.length = 0;
+    if (who) { S.settings.medlemId = who; IDB.put('kv', 'settings', S.settings); }
+  }
   S.uploadQueue = Array.isArray(uq) ? uq : [];
   pk.forEach((k, i) => { if (pv[i]) S.pending.set(k, pv[i]); });
   overlayPending('noter', S.noter); overlayPending('listor', S.listor); overlayPending('mappar', S.mappar);
