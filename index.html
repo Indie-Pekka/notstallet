@@ -294,6 +294,7 @@ body.alpha-pad .app{padding-right:44px}
   <button class="btn small" id="selAll">Markera alla som visas</button>
   <span style="flex:1"></span>
   <button class="btn" id="selCancel">Avbryt</button>
+  <button class="btn" id="selShare">⇪ Dela pdf</button>
   <button class="btn primary" id="selAdd">Lägg till i kör / låtlista…</button>
 </div>
 
@@ -307,7 +308,7 @@ import * as pdfjsLib from './pdf.min.mjs';
 
 // 'artifact' = versionen i Claude (molnlagring), 'pwa' = hemskärmsappen (allt sparas på iPaden). Sätts av byggskriptet.
 const APP_MODE = 'pwa';
-const APP_VERSION = '2026.11.21a';
+const APP_VERSION = '2026.11.22a';
 const LOCAL = APP_MODE === 'pwa';
 // 'wix' = medlemsläget på popkörernas hemsida: noter, låtlistor och anteckningar kommer från hemsidan via
 // sidan som bäddar in appen (postMessage). Medlemmen läser och antecknar men laddar inte upp och tar inte bort något.
@@ -1072,12 +1073,63 @@ function renderSelBar(){
   S.sel = S.sel.filter(id => S.noter[id]);
   $('#selBar').hidden = !S.selMode || S.tab !== 'noter';
   $('#selCount').textContent = S.sel.length ? `${S.sel.length} ${S.sel.length === 1 ? 'not vald' : 'noter valda'}` : 'Tryck på noterna du vill välja';
-  $('#selAdd').disabled = !S.sel.length;
+  $('#selAdd').disabled = !S.sel.length; $('#selShare').disabled = !S.sel.length;
 }
 $('#selBtn').onclick = () => setSelMode(!S.selMode);
 $('#selCancel').onclick = () => setSelMode(false);
 $('#selAll').onclick = () => { const vis = sortedNoter(S.search, S.korFilter, S.notInList).map(n => n.id); S.sel = [...S.sel, ...vis.filter(id => !S.sel.includes(id))]; renderNoter(); renderSelBar(); };
 $('#selAdd').onclick = () => bulkAdd([...S.sel]);
+$('#selShare').onclick = () => shareNotes([...S.sel]);
+
+// Dela pdf:er (t.ex. till pianisten): filerna hämtas först, sedan öppnas iPadens dela-ruta med ett tryck.
+// Safari kräver att dela-rutan öppnas direkt av ett tryck, därför två steg. Appens anteckningar följer inte med.
+function pdfFileName(t, prefix){ return (prefix || '') + (String(t || 'Not').replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120) || 'Not') + '.pdf'; }
+async function shareNotes(ids, opts = {}){
+  if (MEMBER) return; // medlemsläget: noterna delas inte vidare härifrån
+  ids = ids.filter(id => S.noter[id]);
+  if (!ids.length) return;
+  const n = ids.length, what = n === 1 ? `”${esc(S.noter[ids[0]].titel)}”` : `${n} noter`;
+  openModal(`<h2>Dela pdf</h2><p id="shTxt">Hämtar ${what}…</p>
+    <p style="font-size:14px;color:var(--muted)">Pdf:en delas som den laddades upp – anteckningar och bläddringspunkter du gjort i appen följer inte med.</p>
+    <ul class="dupList" id="shErr"></ul>
+    <div class="actions"><button class="btn" id="shNo">Avbryt</button><button class="btn primary" id="shGo" disabled>Dela</button></div>`);
+  let cancelled = false;
+  $('#shNo').onclick = () => { cancelled = true; closeModal(); };
+  const files = [], missing = [];
+  for (let i = 0; i < n; i++) {
+    const id = ids[i];
+    const t = $('#shTxt'); if (t && n > 1) t.textContent = `Hämtar ${i + 1} av ${n}…`;
+    try {
+      const buf = await getPdfBytes(id);
+      const pre = opts.numbered ? String(i + 1).padStart(2, '0') + ' ' : '';
+      files.push(new File([buf], pdfFileName(S.noter[id].titel, pre), { type: 'application/pdf' }));
+    } catch { missing.push(S.noter[id] ? S.noter[id].titel : id); }
+    if (cancelled) return;
+  }
+  if (cancelled || !$('#shGo')) return;
+  missing.forEach(t => $('#shErr').insertAdjacentHTML('beforeend', `<li><span>${esc(t)}</span><span>kunde inte hämtas</span></li>`));
+  if (!files.length) { $('#shTxt').textContent = 'Ingen fil kunde hämtas.'; $('#shGo').hidden = true; $('#shNo').textContent = 'Stäng'; return; }
+  const size = files.reduce((a, f) => a + f.size, 0);
+  $('#shTxt').textContent = `${files.length === 1 ? files[0].name : files.length + ' filer'} klar${files.length === 1 ? '' : 'a'} att dela (${fmtMB(size)}).`;
+  const go = $('#shGo'); go.disabled = false; go.textContent = files.length === 1 ? 'Dela' : `Dela ${files.length} filer`;
+  go.onclick = () => {
+    const done = msg => { closeModal(); if (msg) toast2(msg); };
+    if (!LOCAL) {
+      // Claude-versionen: spara filerna i stället (dela-rutan når inte ut härifrån)
+      (async () => { try { const dl = await window.claude.use('downloads'); for (const f of files) await dl.save({ filename: f.name, data: f }); done(`${files.length} fil${files.length === 1 ? '' : 'er'} sparad${files.length === 1 ? '' : 'e'}`); }
+        catch (e) { done('Kunde inte spara: ' + (e && e.message || e)); } })();
+      return;
+    }
+    const data = { files, title: files.length === 1 ? files[0].name.replace(/\.pdf$/, '') : (opts.title || 'Noter') };
+    if (navigator.canShare && navigator.canShare({ files })) {
+      navigator.share(data).then(() => done(), e => { if (e && e.name === 'AbortError') done(); else done('Kunde inte dela: ' + (e && e.message || e)); });
+    } else {
+      // Webbläsare utan dela-ruta: ladda ner filerna en och en
+      files.forEach((f, i) => setTimeout(() => { const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 30000); }, i * 400));
+      done(`${files.length} fil${files.length === 1 ? '' : 'er'} laddas ner`);
+    }
+  };
+}
 
 function bulkAdd(ids){
   if (!ids.length) return;
@@ -1277,6 +1329,7 @@ function renderListDetail(){
     <div class="tools" style="margin-top:12px">
       <button class="btn primary" id="ldAdd">＋ Lägg till noter</button>
       <button class="btn" id="ldUpload">⇪ Ladda upp ny not</button>
+      <button class="btn" id="ldShare">⇪ Dela låtlistans pdf:er</button>
       <span style="flex:1"></span>
       <button class="btn danger" id="ldDelete">Ta bort låtlistan</button>
     </div>`;
@@ -1288,6 +1341,8 @@ function renderListDetail(){
   $('#ldDate').onchange = e => { const m = S.listor[l.id]; if (!m) return; m.datum = e.target.value; writeList(l.id); };
   $('#ldAdd').onclick = () => pickForList(l.id);
   $('#ldUpload').onclick = () => { S.uploadTarget = l.id; $('#fileIn').click(); };
+  $('#ldShare').onclick = () => { const L = S.listor[l.id]; if (!L) return; const ids = [...new Set(L.verk)].filter(id => S.noter[id]);
+    if (!ids.length) { toast2('Låtlistan har inga noter än'); return; } shareNotes(ids, { numbered: true, title: L.namn }); };
   $('#ldDelete').onclick = () => confirmBox('Ta bort låtlistan?', `”${esc(l.namn)}” tas bort. Noterna finns kvar i biblioteket. Det går inte att ångra.`, 'Ta bort', () => deleteList(l.id));
   renderListItems();
 }
@@ -2377,11 +2432,13 @@ $('#vMore').onclick = () => {
     <label style="display:flex;gap:10px;align-items:center;min-height:44px"><input type="checkbox" id="setFill" ${S.settings.fillWidth ? 'checked' : ''} style="width:22px;height:22px"> Liggande iPad: noten fyller bredden – dra med fingret för att scrolla</label>
     <label class="field">Bläddringseffekt – syns när du bläddrar<select id="setFlip">${FLIP_FX.map(([v, t]) => `<option value="${v}" ${flipMode() === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
     <p style="font-size:14px;color:var(--muted)">Zooma in eller ut (50–400 %) genom att nypa med två fingrar och spara zoomen för noten i rutan som dyker upp. Bläddra: tryck i högra eller vänstra tredjedelen, svep åt sidan, eller använd en bläddringspedal (piltangenter / Page Up-Down). Tryck i mitten för att visa eller dölja verktygen.</p>
+    ${MEMBER ? '' : '<div class="actions" style="justify-content:flex-start;margin-top:4px"><button class="btn" id="setShare">⇪ Dela noten som pdf</button></div>'}
     <div class="actions"><button class="btn danger" id="setClear" style="margin-right:auto">Rensa sidans anteckningar</button><button class="btn danger" id="setClearStops">Ta bort sidans bläddringspunkter</button><button class="btn" id="setTempo">Läs av tempo från noten igen</button>${(S.noter[V.queue[V.qi]] || {}).zoom || Math.abs(V.zoom - 1) > 0.01 ? '<button class="btn" id="setZoomOrig">Återgå till originalstorlek</button>' : ''}<button class="btn primary" id="setOk">Klar</button></div>`);
   $('#setPencil').onchange = e => { S.settings.pencilDraws = e.target.checked; IDB.put('kv', 'settings', S.settings); };
   $('#setFill').onchange = e => { S.settings.fillWidth = e.target.checked; IDB.put('kv', 'settings', S.settings); showPage({ quiet: true }); };
   $('#setFlip').onchange = e => { S.settings.flip = e.target.value; IDB.put('kv', 'settings', S.settings); if (e.target.value !== 'av') { if (flipFx(1)) slideIn(1); } };
   $('#setOk').onclick = closeModal;
+  if ($('#setShare')) $('#setShare').onclick = () => { const id = V.queue[V.qi]; closeModal(); shareNotes([id]); };
   if ($('#setZoomOrig')) $('#setZoomOrig').onclick = () => { closeModal(); resetZoomToOriginal(); };
   $('#setTempo').onclick = () => { closeModal(); rereadTempo(); };
   $('#setClearStops').onclick = () => {
