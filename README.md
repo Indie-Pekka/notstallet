@@ -5,7 +5,7 @@ Allt sparas lokalt på iPaden. Appen fungerar helt offline när den väl är ins
 
 **Installera:** öppna https://indie-pekka.github.io/notstallet/ i Safari på iPaden → dela-knappen → *Lägg till på hemskärmen*.
 
-Version 2026.11.22a. Byggd av samma källkod som Claude-artefakten "Notstället". pdf.js (Apache 2.0) ingår, se LICENSE-pdfjs.txt.
+Version 2026.11.28a. Byggd av samma källkod som Claude-artefakten "Notstället". pdf.js (Apache 2.0) ingår, se LICENSE-pdfjs.txt.
 
 ## Medlemsläget (medlem/)
 

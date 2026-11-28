@@ -306,6 +306,9 @@ const LOCAL = APP_MODE === 'pwa';
 // 'wix' = medlemsläget på popkörernas hemsida: noter, låtlistor och anteckningar kommer från hemsidan via
 // sidan som bäddar in appen (postMessage). Medlemmen läser och antecknar men laddar inte upp och tar inte bort något.
 const MEMBER = APP_MODE === 'wix';
+// Zoom (nyp med två fingrar + sparad zoom per not). Avstängd tills vidare (28 nov 2026, Hugo) – sätt true för att slå på igen.
+// Sparade zoomnivåer ligger kvar i datan och används igen när zoomen slås på.
+const ZOOM_ON = false;
 
 const BASE = document.baseURI;
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('./pdf.worker.min.mjs', BASE).href;
@@ -1931,7 +1934,7 @@ async function showPage(opts = {}){
   loadAnn(id);
   const orient = curOrient();
   if (V.zoomFor !== id || V.zoomOrient !== orient) {
-    const sz = savedZoom(n);
+    const sz = ZOOM_ON ? savedZoom(n) : null;
     if (V.zoomFor !== id) { applyNoteTempo(n); if (n && !n.tempo && (n.tempoKoll || 0) < TEMPO_V) autoTempo(doc, id); }
     V.zoom = sz ? sz.z : 1; V.offXFrac = sz ? sz.x : 0.5; V.zoomFor = id; V.zoomOrient = orient; V.applyFrac = true; V.pendingOff = null;
   }
@@ -2187,7 +2190,7 @@ function curOrient(){ const { W, H } = stageSize(); return W > H ? 'ligg' : 'sta
 function savedZoom(n){ return (n && n.zoom && n.zoom[curOrient()]) || null; }
 function updateZoomPill(){
   const n = S.noter[V.queue[V.qi]], sz = savedZoom(n), savedZ = sz ? sz.z : 1;
-  const show = V.open && !wrap.hidden && Math.abs(V.zoom - savedZ) > 0.01;
+  const show = ZOOM_ON && V.open && !wrap.hidden && Math.abs(V.zoom - savedZ) > 0.01;
   $('#zoomPill').hidden = !show;
   if (show) $('#zoomTxt').textContent = `Zoom ${Math.round(V.zoom * 100)} %`;
 }
@@ -2424,9 +2427,9 @@ $('#vMore').onclick = () => {
     <label style="display:flex;gap:10px;align-items:center;min-height:44px"><input type="checkbox" id="setPencil" ${S.settings.pencilDraws ? 'checked' : ''} style="width:22px;height:22px"> Apple Pencil ritar alltid (fingret bläddrar)</label>
     <label style="display:flex;gap:10px;align-items:center;min-height:44px"><input type="checkbox" id="setFill" ${S.settings.fillWidth ? 'checked' : ''} style="width:22px;height:22px"> Liggande iPad: noten fyller bredden – dra med fingret för att scrolla</label>
     <label class="field">Bläddringseffekt – syns när du bläddrar<select id="setFlip">${FLIP_FX.map(([v, t]) => `<option value="${v}" ${flipMode() === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
-    <p style="font-size:14px;color:var(--muted)">Zooma in eller ut (50–400 %) genom att nypa med två fingrar och spara zoomen för noten i rutan som dyker upp. Bläddra: tryck i högra eller vänstra tredjedelen, svep åt sidan, eller använd en bläddringspedal (piltangenter / Page Up-Down). Tryck i mitten för att visa eller dölja verktygen.</p>
+    <p style="font-size:14px;color:var(--muted)">${ZOOM_ON ? 'Zooma in eller ut (50–400 %) genom att nypa med två fingrar och spara zoomen för noten i rutan som dyker upp. ' : ''}Bläddra: tryck i högra eller vänstra tredjedelen, svep åt sidan, eller använd en bläddringspedal (piltangenter / Page Up-Down). Tryck i mitten för att visa eller dölja verktygen.</p>
     ${MEMBER ? '' : '<div class="actions" style="justify-content:flex-start;margin-top:4px"><button class="btn" id="setShare">⇪ Dela noten som pdf</button></div>'}
-    <div class="actions"><button class="btn danger" id="setClear" style="margin-right:auto">Rensa sidans anteckningar</button><button class="btn danger" id="setClearStops">Ta bort sidans bläddringspunkter</button><button class="btn" id="setTempo">Läs av tempo från noten igen</button>${(S.noter[V.queue[V.qi]] || {}).zoom || Math.abs(V.zoom - 1) > 0.01 ? '<button class="btn" id="setZoomOrig">Återgå till originalstorlek</button>' : ''}<button class="btn primary" id="setOk">Klar</button></div>`);
+    <div class="actions"><button class="btn danger" id="setClear" style="margin-right:auto">Rensa sidans anteckningar</button><button class="btn danger" id="setClearStops">Ta bort sidans bläddringspunkter</button><button class="btn" id="setTempo">Läs av tempo från noten igen</button>${ZOOM_ON && ((S.noter[V.queue[V.qi]] || {}).zoom || Math.abs(V.zoom - 1) > 0.01) ? '<button class="btn" id="setZoomOrig">Återgå till originalstorlek</button>' : ''}<button class="btn primary" id="setOk">Klar</button></div>`);
   $('#setPencil').onchange = e => { S.settings.pencilDraws = e.target.checked; IDB.put('kv', 'settings', S.settings); };
   $('#setFill').onchange = e => { S.settings.fillWidth = e.target.checked; IDB.put('kv', 'settings', S.settings); showPage({ quiet: true }); };
   $('#setFlip').onchange = e => { S.settings.flip = e.target.value; IDB.put('kv', 'settings', S.settings); if (e.target.value !== 'av') { if (flipFx(1)) slideIn(1); } };
@@ -2760,7 +2763,7 @@ stage.addEventListener('pointerdown', e => {
   if (!$('#vlist').hidden) { $('#vlist').hidden = true; return; }
   if (e.pointerType === 'touch') {
     V.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (V.touches.size === 2 && !wrap.hidden && !V.pinch) {
+    if (ZOOM_ON && V.touches.size === 2 && !wrap.hidden && !V.pinch) {
       if (V.stroke && V.stroke.ptype === 'touch') { V.stroke = null; clearLive(); }
       if (!V.stroke) { for (const id of V.touches.keys()) { try { stage.setPointerCapture(id); } catch {} } startPinch(); return; }
     }
